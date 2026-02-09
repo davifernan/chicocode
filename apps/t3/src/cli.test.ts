@@ -21,6 +21,8 @@ describe("parseCliOptions", () => {
     expect(options.webPort).toBe(5002);
     expect(options.noOpen).toBe(true);
     expect(options.launchCwd).toBe("/workspace");
+    expect(options.backendPortLocked).toBe(true);
+    expect(options.webPortLocked).toBe(true);
   });
 
   it("allows command line arguments to override defaults", () => {
@@ -41,6 +43,14 @@ describe("parseCliOptions", () => {
     expect(options.webPort).toBe(7002);
     expect(options.noOpen).toBe(true);
     expect(options.launchCwd).toBe(path.resolve("apps/t3"));
+    expect(options.backendPortLocked).toBe(true);
+    expect(options.webPortLocked).toBe(true);
+  });
+
+  it("keeps ports unlocked when using defaults", () => {
+    const options = parseCliOptions([], {}, "/workspace");
+    expect(options.backendPortLocked).toBe(false);
+    expect(options.webPortLocked).toBe(false);
   });
 
   it("supports help flag", () => {

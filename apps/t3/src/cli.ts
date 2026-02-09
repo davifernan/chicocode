@@ -40,6 +40,8 @@ interface CliOptions {
   noOpen: boolean;
   showHelp: boolean;
   showVersion: boolean;
+  backendPortLocked: boolean;
+  webPortLocked: boolean;
 }
 
 interface StartupErrorShape {
@@ -71,6 +73,11 @@ export function formatStartupError(error: unknown, options: CliOptions): string 
   return "Failed to start t3 runtime.";
 }
 
+function isPortInUseError(error: unknown): boolean {
+  const candidate = error as StartupErrorShape;
+  return candidate?.code === "EADDRINUSE";
+}
+
 export function parseCliOptions(
   argv: string[],
   env: NodeJS.ProcessEnv,
@@ -78,6 +85,8 @@ export function parseCliOptions(
 ): CliOptions {
   let backendPort = parsePort(env.T3_BACKEND_PORT, DEFAULT_BACKEND_PORT);
   let webPort = parsePort(env.T3_WEB_PORT, DEFAULT_WEB_PORT);
+  let backendPortLocked = Boolean(env.T3_BACKEND_PORT);
+  let webPortLocked = Boolean(env.T3_WEB_PORT);
   let launchCwd = cwd;
   let noOpen = env.T3_NO_OPEN === "1";
   let showHelp = false;
@@ -104,6 +113,7 @@ export function parseCliOptions(
 
     if (arg.startsWith("--backend-port=")) {
       backendPort = parseExplicitPort(arg.split("=")[1] ?? "", "--backend-port");
+      backendPortLocked = true;
       continue;
     }
 
@@ -112,17 +122,20 @@ export function parseCliOptions(
         readArgValue(argv, index, "--backend-port"),
         "--backend-port",
       );
+      backendPortLocked = true;
       index += 1;
       continue;
     }
 
     if (arg.startsWith("--web-port=")) {
       webPort = parseExplicitPort(arg.split("=")[1] ?? "", "--web-port");
+      webPortLocked = true;
       continue;
     }
 
     if (arg === "--web-port") {
       webPort = parseExplicitPort(readArgValue(argv, index, "--web-port"), "--web-port");
+      webPortLocked = true;
       index += 1;
       continue;
     }
@@ -148,6 +161,8 @@ export function parseCliOptions(
     noOpen,
     showHelp,
     showVersion,
+    backendPortLocked,
+    webPortLocked,
   };
 }
 
@@ -366,11 +381,35 @@ async function main() {
     return;
   }
 
-  try {
-    await runCli(options);
-  } catch (error) {
-    process.stderr.write(`${formatStartupError(error, options)}\n`);
-    process.exit(1);
+  const maxPortRetryAttempts = 10;
+  for (let attempt = 0; attempt < maxPortRetryAttempts; attempt += 1) {
+    try {
+      await runCli(options);
+      return;
+    } catch (error) {
+      const canRetryWithNextPorts =
+        isPortInUseError(error) &&
+        !options.backendPortLocked &&
+        !options.webPortLocked &&
+        attempt < maxPortRetryAttempts - 1;
+      if (canRetryWithNextPorts) {
+        const nextBackendPort = options.backendPort + 1;
+        const nextWebPort = options.webPort + 1;
+        process.stderr.write(
+          `Ports ${options.backendPort}/${options.webPort} busy; retrying with ${nextBackendPort}/${nextWebPort}.\n`,
+        );
+        options = {
+          ...options,
+          backendPort: nextBackendPort,
+          webPort: nextWebPort,
+        };
+        continue;
+      }
+
+      process.stderr.write(`${formatStartupError(error, options)}\n`);
+      process.exit(1);
+      return;
+    }
   }
 }
 
