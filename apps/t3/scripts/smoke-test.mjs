@@ -432,9 +432,14 @@ async function main() {
         "If-None-Match": assetEtag,
       },
     });
-    if (conditionalRangedAsset.status !== 206) {
+    if (conditionalRangedAsset.status !== 304) {
       throw new Error(
-        `Smoke test failed: expected conditional ranged asset status 206, received ${conditionalRangedAsset.status}.`,
+        `Smoke test failed: expected conditional ranged asset status 304, received ${conditionalRangedAsset.status}.`,
+      );
+    }
+    if (conditionalRangedAsset.headers.get("content-range") !== null) {
+      throw new Error(
+        "Smoke test failed: expected no content-range on conditional ranged If-None-Match response.",
       );
     }
     const ifRangeEtagAsset = await fetch(assetUrl, {
@@ -465,9 +470,14 @@ async function main() {
         "If-Modified-Since": assetLastModified,
       },
     });
-    if (rangedModifiedSinceAsset.status !== 206) {
+    if (rangedModifiedSinceAsset.status !== 304) {
       throw new Error(
-        `Smoke test failed: expected ranged If-Modified-Since asset status 206, received ${rangedModifiedSinceAsset.status}.`,
+        `Smoke test failed: expected ranged If-Modified-Since asset status 304, received ${rangedModifiedSinceAsset.status}.`,
+      );
+    }
+    if (rangedModifiedSinceAsset.headers.get("content-range") !== null) {
+      throw new Error(
+        "Smoke test failed: expected no content-range on ranged If-Modified-Since response.",
       );
     }
     const ifRangeMismatchAsset = await fetch(assetUrl, {

@@ -840,6 +840,29 @@ function startStaticWebServer(distRoot: string, port: number) {
           return;
         }
 
+        const etag = staticEtagFor(stats);
+        const lastModified = stats.mtime.toUTCString();
+        const hasIfNoneMatchHeader = request.headers["if-none-match"] !== undefined;
+        const ifNoneMatchMatches = ifNoneMatchSatisfied(request.headers["if-none-match"], etag);
+        const ifModifiedSinceMatches = hasIfNoneMatchHeader
+          ? false
+          : ifModifiedSinceSatisfied(request.headers["if-modified-since"], stats.mtimeMs);
+        const shouldReturnNotModified = ifNoneMatchMatches || ifModifiedSinceMatches;
+
+        if (shouldReturnNotModified) {
+          response.statusCode = 304;
+          response.setHeader("Content-Type", contentTypeFor(targetPath));
+          response.setHeader("ETag", etag);
+          response.setHeader("Last-Modified", lastModified);
+          response.setHeader("Accept-Ranges", "bytes");
+          response.setHeader("Vary", "Range");
+          applyStaticSecurityHeaders(response, {
+            cacheControl: cacheControlFor(targetPath),
+          });
+          response.end();
+          return;
+        }
+
         const resolvedRange = parseByteRangeHeader(request.headers.range, stats.size);
         if (resolvedRange === "invalid") {
           respondText(416, "Range Not Satisfiable", {
@@ -849,19 +872,10 @@ function startStaticWebServer(distRoot: string, port: number) {
           });
           return;
         }
-
-        const etag = staticEtagFor(stats);
-        const lastModified = stats.mtime.toUTCString();
         const effectiveRange =
           resolvedRange && ifRangeSatisfied(request.headers["if-range"], etag, stats.mtimeMs)
             ? resolvedRange
             : null;
-        const hadRangeRequest = resolvedRange !== null;
-        const hasIfNoneMatchHeader = request.headers["if-none-match"] !== undefined;
-        const ifNoneMatchMatches = ifNoneMatchSatisfied(request.headers["if-none-match"], etag);
-        const ifModifiedSinceMatches = hasIfNoneMatchHeader
-          ? false
-          : ifModifiedSinceSatisfied(request.headers["if-modified-since"], stats.mtimeMs);
 
         response.statusCode = effectiveRange ? 206 : 200;
         response.setHeader("Content-Type", contentTypeFor(targetPath));
@@ -879,13 +893,6 @@ function startStaticWebServer(distRoot: string, port: number) {
         applyStaticSecurityHeaders(response, {
           cacheControl: cacheControlFor(targetPath),
         });
-
-        if (!hadRangeRequest && (ifNoneMatchMatches || ifModifiedSinceMatches)) {
-          response.statusCode = 304;
-          response.removeHeader("Content-Length");
-          response.end();
-          return;
-        }
 
         if (requestMethod === "HEAD") {
           response.end();
