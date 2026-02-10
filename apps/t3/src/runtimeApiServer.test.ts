@@ -385,6 +385,32 @@ describe("runtimeApiServer", () => {
     client.socket.close();
   });
 
+  it("accepts relative shell.openInEditor cwd paths", async () => {
+    const server = await startRuntimeApiServer({
+      port: 0,
+      launchCwd: process.cwd(),
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.wsUrl);
+    await client.nextMessage();
+
+    const response = await sendRequest(
+      client.socket,
+      client.nextMessage,
+      "shell-open-relative-1",
+      "shell.openInEditor",
+      {
+        cwd: ".",
+        editor: "file-manager",
+      },
+    );
+    expect(response.ok).toBe(true);
+    expect(response.result).toBeNull();
+
+    client.socket.close();
+  });
+
   it("responds to dialogs.pickFolder requests", async () => {
     const server = await startRuntimeApiServer({
       port: 0,
