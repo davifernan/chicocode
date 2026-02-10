@@ -146,6 +146,13 @@ class WsNativeApiClient {
       });
 
       socket.addEventListener("error", (event) => {
+        if (this.socket !== socket) {
+          if (!hasOpened) {
+            rejectConnection();
+          }
+          return;
+        }
+
         if (!hasOpened) {
           rejectConnection();
           return;
@@ -157,13 +164,28 @@ class WsNativeApiClient {
           pending.reject(requestSocketError(id, event));
         }
         this.pending.clear();
+        try {
+          socket.close();
+        } catch {
+          // best-effort close after error
+        }
       });
 
       socket.addEventListener("message", (event) => {
+        if (this.socket !== socket) {
+          return;
+        }
         void this.handleMessage(event.data);
       });
 
       socket.addEventListener("close", (event) => {
+        if (this.socket !== socket) {
+          if (!hasOpened) {
+            rejectConnection(runtimeConnectErrorFromClose(event));
+          }
+          return;
+        }
+
         this.socket = null;
         if (!hasOpened) {
           rejectConnection(runtimeConnectErrorFromClose(event));
