@@ -537,6 +537,14 @@ function normalizeEtagHeaderValue(value: string | string[] | undefined): string[
     .filter((token) => token.length > 0);
 }
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  return value;
+}
+
 export function ifNoneMatchSatisfied(
   ifNoneMatchHeader: string | string[] | undefined,
   etag: string,
@@ -587,9 +595,7 @@ export function ifModifiedSinceSatisfied(
     return false;
   }
 
-  const rawHeaderValue = Array.isArray(ifModifiedSinceHeader)
-    ? ifModifiedSinceHeader[0]
-    : ifModifiedSinceHeader;
+  const rawHeaderValue = firstHeaderValue(ifModifiedSinceHeader);
   if (!rawHeaderValue) {
     return false;
   }
@@ -610,9 +616,7 @@ export function ifUnmodifiedSinceSatisfied(
     return true;
   }
 
-  const rawHeaderValue = Array.isArray(ifUnmodifiedSinceHeader)
-    ? ifUnmodifiedSinceHeader[0]
-    : ifUnmodifiedSinceHeader;
+  const rawHeaderValue = firstHeaderValue(ifUnmodifiedSinceHeader);
   if (!rawHeaderValue) {
     return true;
   }
@@ -634,7 +638,7 @@ export function ifRangeSatisfied(
     return true;
   }
 
-  const rawHeaderValue = Array.isArray(ifRangeHeader) ? ifRangeHeader[0] : ifRangeHeader;
+  const rawHeaderValue = firstHeaderValue(ifRangeHeader);
   if (!rawHeaderValue) {
     return true;
   }
