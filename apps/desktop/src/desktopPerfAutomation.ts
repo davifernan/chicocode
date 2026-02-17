@@ -650,6 +650,7 @@ async function runRendererPerfInteractions(
         };
       });
 
+      const runOptionalRendererInteractions = ${RUN_OPTIONAL_RENDERER_INTERACTIONS};
       const clickCount = Math.min(1, threadButtons.length);
       for (let index = 0; index < clickCount; index += 1) {
         clickElement(threadButtons[index]);
@@ -657,7 +658,7 @@ async function runRendererPerfInteractions(
       }
 
       const scroller = document.querySelector("[data-perf-messages-scroll]");
-      if (scroller instanceof HTMLElement) {
+      if (runOptionalRendererInteractions && scroller instanceof HTMLElement) {
         scroller.scrollTo({ top: scroller.scrollHeight, behavior: "instant" });
         await sleep(60);
         scroller.scrollTo({ top: 0, behavior: "instant" });
@@ -701,7 +702,7 @@ async function runRendererPerfInteractions(
       );
       const setValue = valueDescriptor?.set;
       must(typeof setValue === "function", "Textarea value setter unavailable.");
-      const inputText = "Perf.";
+      const inputText = runOptionalRendererInteractions ? "Perf." : ".";
 
       for (const character of inputText) {
         textarea.dispatchEvent(
@@ -737,7 +738,6 @@ async function runRendererPerfInteractions(
         return preferred.textContent?.trim() ?? null;
       };
 
-      const runOptionalRendererInteractions = ${RUN_OPTIONAL_RENDERER_INTERACTIONS};
       let selectedModel = null;
       if (runOptionalRendererInteractions) {
         selectedModel = await selectOption(
