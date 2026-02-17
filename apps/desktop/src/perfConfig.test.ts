@@ -25,6 +25,12 @@ describe("shouldRunTerminalPerfInteractions", () => {
         CI: "true",
       }),
     ).toBe(true);
+    expect(
+      shouldRunTerminalPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_TERMINAL: "TRUE",
+        CI: "true",
+      }),
+    ).toBe(true);
   });
 
   it("supports explicit false values", () => {
@@ -40,5 +46,26 @@ describe("shouldRunTerminalPerfInteractions", () => {
         CI: "false",
       }),
     ).toBe(false);
+    expect(
+      shouldRunTerminalPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_TERMINAL: "FALSE",
+        CI: "false",
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to CI-based default for unknown values", () => {
+    expect(
+      shouldRunTerminalPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_TERMINAL: "maybe",
+        CI: "true",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunTerminalPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_TERMINAL: "maybe",
+        CI: "false",
+      }),
+    ).toBe(true);
   });
 });
