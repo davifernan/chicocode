@@ -32,6 +32,19 @@ import {
 
 type Action =
   | { type: "SYNC_SERVER_READ_MODEL"; readModel: OrchestrationReadModel }
+  | {
+      type: "HYDRATE_THREAD_TERMINALS";
+      threadId: ThreadId;
+      terminalState: {
+        terminalOpen: boolean;
+        terminalHeight: number;
+        terminalIds: string[];
+        runningTerminalIds: string[];
+        activeTerminalId: string;
+        terminalGroups: ThreadTerminalGroup[];
+        activeTerminalGroupId: string;
+      };
+    }
   | { type: "MARK_THREAD_VISITED"; threadId: ThreadId; visitedAt?: string }
   | { type: "MARK_THREAD_UNREAD"; threadId: ThreadId }
   | { type: "TOGGLE_PROJECT"; projectId: Project["id"] }
@@ -535,6 +548,23 @@ export function reducer(state: AppState, action: Action): AppState {
         threadsHydrated: true,
       };
     }
+
+    case "HYDRATE_THREAD_TERMINALS":
+      return {
+        ...state,
+        threads: updateThread(state.threads, action.threadId, (thread) =>
+          normalizeThreadTerminals({
+            ...thread,
+            terminalOpen: action.terminalState.terminalOpen,
+            terminalHeight: action.terminalState.terminalHeight,
+            terminalIds: action.terminalState.terminalIds,
+            runningTerminalIds: action.terminalState.runningTerminalIds,
+            activeTerminalId: action.terminalState.activeTerminalId,
+            terminalGroups: action.terminalState.terminalGroups,
+            activeTerminalGroupId: action.terminalState.activeTerminalGroupId,
+          }),
+        ),
+      };
 
     case "MARK_THREAD_VISITED": {
       const visitedAt = action.visitedAt ?? new Date().toISOString();

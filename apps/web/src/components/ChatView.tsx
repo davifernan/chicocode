@@ -57,6 +57,11 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
+import {
+  createDefaultDraftThreadTerminalState,
+  reduceDraftThreadTerminalState,
+  type DraftThreadTerminalState,
+} from "../draftThreadTerminalState";
 import { basenameOfPath, getVscodeIconUrlForEntry } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -198,6 +203,7 @@ function buildExpandedImagePreview(
 function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
+  draftTerminalState: DraftThreadTerminalState,
   fallbackModel: string,
   error: string | null,
 ): Thread {
@@ -207,18 +213,13 @@ function buildLocalDraftThread(
     projectId: draftThread.projectId,
     title: "New thread",
     model: fallbackModel,
-    terminalOpen: false,
-    terminalHeight: 280,
-    terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
-    runningTerminalIds: [],
-    activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
-    terminalGroups: [
-      {
-        id: `group-${DEFAULT_THREAD_TERMINAL_ID}`,
-        terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
-      },
-    ],
-    activeTerminalGroupId: `group-${DEFAULT_THREAD_TERMINAL_ID}`,
+    terminalOpen: draftTerminalState.terminalOpen,
+    terminalHeight: draftTerminalState.terminalHeight,
+    terminalIds: draftTerminalState.terminalIds,
+    runningTerminalIds: draftTerminalState.runningTerminalIds,
+    activeTerminalId: draftTerminalState.activeTerminalId,
+    terminalGroups: draftTerminalState.terminalGroups,
+    activeTerminalGroupId: draftTerminalState.activeTerminalGroupId,
     session: null,
     messages: [],
     error,
@@ -230,6 +231,46 @@ function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
   };
+}
+
+function threadTerminalsMatchState(thread: Thread, terminalState: DraftThreadTerminalState): boolean {
+  if (
+    thread.terminalOpen !== terminalState.terminalOpen ||
+    thread.terminalHeight !== terminalState.terminalHeight ||
+    thread.activeTerminalId !== terminalState.activeTerminalId ||
+    thread.activeTerminalGroupId !== terminalState.activeTerminalGroupId
+  ) {
+    return false;
+  }
+  if (
+    thread.terminalIds.length !== terminalState.terminalIds.length ||
+    thread.runningTerminalIds.length !== terminalState.runningTerminalIds.length ||
+    thread.terminalGroups.length !== terminalState.terminalGroups.length
+  ) {
+    return false;
+  }
+  if (!thread.terminalIds.every((terminalId, index) => terminalId === terminalState.terminalIds[index])) {
+    return false;
+  }
+  if (
+    !thread.runningTerminalIds.every(
+      (terminalId, index) => terminalId === terminalState.runningTerminalIds[index],
+    )
+  ) {
+    return false;
+  }
+  return thread.terminalGroups.every((group, groupIndex) => {
+    const terminalStateGroup = terminalState.terminalGroups[groupIndex];
+    if (!terminalStateGroup || group.id !== terminalStateGroup.id) {
+      return false;
+    }
+    if (group.terminalIds.length !== terminalStateGroup.terminalIds.length) {
+      return false;
+    }
+    return group.terminalIds.every(
+      (terminalId, terminalIdIndex) => terminalId === terminalStateGroup.terminalIds[terminalIdIndex],
+    );
+  });
 }
 
 function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
@@ -475,6 +516,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
   >({});
+  const [draftTerminalStateByThreadId, setDraftTerminalStateByThreadId] = useState<
+    Record<ThreadId, DraftThreadTerminalState>
+  >({});
   const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
@@ -496,6 +540,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const sendInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+
+  const updateDraftTerminalState = useCallback(
+    (
+      targetThreadId: ThreadId,
+      updater: (state: DraftThreadTerminalState) => DraftThreadTerminalState,
+    ) => {
+      setDraftTerminalStateByThreadId((existing) => {
+        const previous = existing[targetThreadId] ?? createDefaultDraftThreadTerminalState();
+        const next = updater(previous);
+        if (next === previous) {
+          return existing;
+        }
+        return {
+          ...existing,
+          [targetThreadId]: next,
+        };
+      });
+    },
+    [],
+  );
 
   const setPrompt = useCallback(
     (nextPrompt: string) => {
@@ -531,17 +595,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const serverThread = state.threads.find((t) => t.id === threadId);
   const fallbackDraftProject = state.projects.find((project) => project.id === draftThread?.projectId);
   const localDraftError = localDraftErrorsByThreadId[threadId] ?? null;
+  const localDraftTerminalState = draftTerminalStateByThreadId[threadId];
   const localDraftThread = useMemo(
     () =>
       draftThread
         ? buildLocalDraftThread(
             threadId,
             draftThread,
+            localDraftTerminalState ?? createDefaultDraftThreadTerminalState(),
             fallbackDraftProject?.model ?? DEFAULT_MODEL,
             localDraftError,
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
+    [draftThread, fallbackDraftProject?.model, localDraftError, localDraftTerminalState, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
   const isServerThread = serverThread !== undefined;
@@ -568,6 +634,27 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return rest as Record<ThreadId, string | null>;
     });
   }, [serverThread, threadId]);
+
+  useEffect(() => {
+    if (!serverThread || !localDraftTerminalState) {
+      return;
+    }
+    if (!threadTerminalsMatchState(serverThread, localDraftTerminalState)) {
+      dispatch({
+        type: "HYDRATE_THREAD_TERMINALS",
+        threadId: serverThread.id,
+        terminalState: localDraftTerminalState,
+      });
+      return;
+    }
+    setDraftTerminalStateByThreadId((existing) => {
+      if (!(threadId in existing)) {
+        return existing;
+      }
+      const { [threadId]: _removed, ...rest } = existing;
+      return rest as Record<ThreadId, DraftThreadTerminalState>;
+    });
+  }, [dispatch, localDraftTerminalState, serverThread, threadId]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -852,6 +939,29 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const hasReachedTerminalLimit =
     (activeThread?.terminalIds.length ?? 0) >= MAX_THREAD_TERMINAL_COUNT;
+  const setThreadError = useCallback(
+    (targetThreadId: ThreadId | null, error: string | null) => {
+      if (!targetThreadId) return;
+      if (state.threads.some((thread) => thread.id === targetThreadId)) {
+        dispatch({
+          type: "SET_ERROR",
+          threadId: targetThreadId,
+          error,
+        });
+        return;
+      }
+      setLocalDraftErrorsByThreadId((existing) => {
+        if ((existing[targetThreadId] ?? null) === error) {
+          return existing;
+        }
+        return {
+          ...existing,
+          [targetThreadId]: error,
+        };
+      });
+    },
+    [dispatch, state.threads],
+  );
 
   const focusComposer = useCallback(() => {
     const textarea = textareaRef.current;
@@ -865,43 +975,108 @@ export default function ChatView({ threadId }: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const setTerminalOpen = useCallback(
+    (open: boolean) => {
+      if (!activeThreadId) return;
+      if (isLocalDraftThread) {
+        updateDraftTerminalState(activeThreadId, (draftState) =>
+          reduceDraftThreadTerminalState(draftState, {
+            type: "set-open",
+            open,
+          }),
+        );
+        return;
+      }
+      dispatch({
+        type: "SET_THREAD_TERMINAL_OPEN",
+        threadId: activeThreadId,
+        open,
+      });
+    },
+    [activeThreadId, dispatch, isLocalDraftThread, updateDraftTerminalState],
+  );
+  const setTerminalHeight = useCallback(
+    (height: number) => {
+      if (!activeThreadId) return;
+      if (isLocalDraftThread) {
+        updateDraftTerminalState(activeThreadId, (draftState) =>
+          reduceDraftThreadTerminalState(draftState, {
+            type: "set-height",
+            height,
+          }),
+        );
+        return;
+      }
+      dispatch({
+        type: "SET_THREAD_TERMINAL_HEIGHT",
+        threadId: activeThreadId,
+        height,
+      });
+    },
+    [activeThreadId, dispatch, isLocalDraftThread, updateDraftTerminalState],
+  );
   const toggleTerminalVisibility = useCallback(() => {
     if (!activeThreadId) return;
-    dispatch({
-      type: "SET_THREAD_TERMINAL_OPEN",
-      threadId: activeThreadId,
-      open: !activeThread?.terminalOpen,
-    });
-  }, [activeThread?.terminalOpen, activeThreadId, dispatch]);
+    setTerminalOpen(!activeThread?.terminalOpen);
+  }, [activeThread?.terminalOpen, activeThreadId, setTerminalOpen]);
   const splitTerminal = useCallback(() => {
     if (!activeThreadId || hasReachedTerminalLimit) return;
-    dispatch({
-      type: "SPLIT_THREAD_TERMINAL",
-      threadId: activeThreadId,
-      terminalId: `terminal-${crypto.randomUUID()}`,
-    });
-    setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, dispatch, hasReachedTerminalLimit]);
-  const createNewTerminal = useCallback(() => {
-    if (!activeThreadId || hasReachedTerminalLimit) return;
-    dispatch({
-      type: "NEW_THREAD_TERMINAL",
-      threadId: activeThreadId,
-      terminalId: `terminal-${crypto.randomUUID()}`,
-    });
-    setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, dispatch, hasReachedTerminalLimit]);
-  const activateTerminal = useCallback(
-    (terminalId: string) => {
-      if (!activeThreadId) return;
+    const terminalId = `terminal-${crypto.randomUUID()}`;
+    if (isLocalDraftThread) {
+      updateDraftTerminalState(activeThreadId, (draftState) =>
+        reduceDraftThreadTerminalState(draftState, {
+          type: "split",
+          terminalId,
+        }),
+      );
+    } else {
       dispatch({
-        type: "SET_THREAD_ACTIVE_TERMINAL",
+        type: "SPLIT_THREAD_TERMINAL",
         threadId: activeThreadId,
         terminalId,
       });
+    }
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [activeThreadId, dispatch, hasReachedTerminalLimit, isLocalDraftThread, updateDraftTerminalState]);
+  const createNewTerminal = useCallback(() => {
+    if (!activeThreadId || hasReachedTerminalLimit) return;
+    const terminalId = `terminal-${crypto.randomUUID()}`;
+    if (isLocalDraftThread) {
+      updateDraftTerminalState(activeThreadId, (draftState) =>
+        reduceDraftThreadTerminalState(draftState, {
+          type: "new",
+          terminalId,
+        }),
+      );
+    } else {
+      dispatch({
+        type: "NEW_THREAD_TERMINAL",
+        threadId: activeThreadId,
+        terminalId,
+      });
+    }
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [activeThreadId, dispatch, hasReachedTerminalLimit, isLocalDraftThread, updateDraftTerminalState]);
+  const activateTerminal = useCallback(
+    (terminalId: string) => {
+      if (!activeThreadId) return;
+      if (isLocalDraftThread) {
+        updateDraftTerminalState(activeThreadId, (draftState) =>
+          reduceDraftThreadTerminalState(draftState, {
+            type: "set-active",
+            terminalId,
+          }),
+        );
+      } else {
+        dispatch({
+          type: "SET_THREAD_ACTIVE_TERMINAL",
+          threadId: activeThreadId,
+          terminalId,
+        });
+      }
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeThreadId, dispatch],
+    [activeThreadId, dispatch, isLocalDraftThread, updateDraftTerminalState],
   );
   const closeTerminal = useCallback(
     (terminalId: string) => {
@@ -924,14 +1099,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
       } else {
         void fallbackExitWrite();
       }
-      dispatch({
-        type: "CLOSE_THREAD_TERMINAL",
-        threadId: activeThreadId,
-        terminalId,
-      });
+      if (isLocalDraftThread) {
+        updateDraftTerminalState(activeThreadId, (draftState) =>
+          reduceDraftThreadTerminalState(draftState, {
+            type: "close",
+            terminalId,
+          }),
+        );
+      } else {
+        dispatch({
+          type: "CLOSE_THREAD_TERMINAL",
+          threadId: activeThreadId,
+          terminalId,
+        });
+      }
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeThread?.terminalIds.length, activeThreadId, dispatch],
+    [activeThread?.terminalIds.length, activeThreadId, dispatch, isLocalDraftThread, updateDraftTerminalState],
   );
   const runProjectScript = useCallback(
     async (
@@ -965,23 +1149,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
         ? `terminal-${crypto.randomUUID()}`
         : baseTerminalId;
 
-      dispatch({
-        type: "SET_THREAD_TERMINAL_OPEN",
-        threadId: activeThreadId,
-        open: true,
-      });
+      setTerminalOpen(true);
       if (shouldCreateNewTerminal) {
-        dispatch({
-          type: "NEW_THREAD_TERMINAL",
-          threadId: activeThreadId,
-          terminalId: targetTerminalId,
-        });
+        if (isLocalDraftThread) {
+          updateDraftTerminalState(activeThreadId, (draftState) =>
+            reduceDraftThreadTerminalState(draftState, {
+              type: "new",
+              terminalId: targetTerminalId,
+            }),
+          );
+        } else {
+          dispatch({
+            type: "NEW_THREAD_TERMINAL",
+            threadId: activeThreadId,
+            terminalId: targetTerminalId,
+          });
+        }
       } else {
-        dispatch({
-          type: "SET_THREAD_ACTIVE_TERMINAL",
-          threadId: activeThreadId,
-          terminalId: targetTerminalId,
-        });
+        if (isLocalDraftThread) {
+          updateDraftTerminalState(activeThreadId, (draftState) =>
+            reduceDraftThreadTerminalState(draftState, {
+              type: "set-active",
+              terminalId: targetTerminalId,
+            }),
+          );
+        } else {
+          dispatch({
+            type: "SET_THREAD_ACTIVE_TERMINAL",
+            threadId: activeThreadId,
+            terminalId: targetTerminalId,
+          });
+        }
       }
       setTerminalFocusRequestId((value) => value + 1);
 
@@ -1012,14 +1210,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
           data: `${script.command}\r`,
         });
       } catch (error) {
-        dispatch({
-          type: "SET_ERROR",
-          threadId: activeThreadId,
-          error: error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
-        });
+        setThreadError(
+          activeThreadId,
+          error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
+        );
       }
     },
-    [activeProject, activeThread, activeThreadId, dispatch, gitCwd, isServerThread],
+    [
+      activeProject,
+      activeThread,
+      activeThreadId,
+      dispatch,
+      gitCwd,
+      isLocalDraftThread,
+      isServerThread,
+      setTerminalOpen,
+      setThreadError,
+      updateDraftTerminalState,
+    ],
   );
   const persistProjectScripts = useCallback(
     async (input: {
@@ -1466,11 +1674,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!activeThread?.terminalOpen) {
-          dispatch({
-            type: "SET_THREAD_TERMINAL_OPEN",
-            threadId: activeThreadId,
-            open: true,
-          });
+          setTerminalOpen(true);
         }
         splitTerminal();
         return;
@@ -1488,11 +1692,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!activeThread?.terminalOpen) {
-          dispatch({
-            type: "SET_THREAD_TERMINAL_OPEN",
-            threadId: activeThreadId,
-            open: true,
-          });
+          setTerminalOpen(true);
         }
         createNewTerminal();
         return;
@@ -1522,37 +1722,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     activeThreadId,
     closeTerminal,
     createNewTerminal,
-    dispatch,
+    setTerminalOpen,
     runProjectScript,
     splitTerminal,
     keybindings,
     onToggleDiff,
     toggleTerminalVisibility,
   ]);
-
-  const setThreadError = useCallback(
-    (threadId: ThreadId | null, error: string | null) => {
-      if (!threadId) return;
-      if (state.threads.some((thread) => thread.id === threadId)) {
-        dispatch({
-          type: "SET_ERROR",
-          threadId,
-          error,
-        });
-        return;
-      }
-      setLocalDraftErrorsByThreadId((existing) => {
-        if ((existing[threadId] ?? null) === error) {
-          return existing;
-        }
-        return {
-          ...existing,
-          [threadId]: error,
-        };
-      });
-    },
-    [dispatch, state.threads],
-  );
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
@@ -2489,13 +2665,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
             onActiveTerminalChange={activateTerminal}
             onCloseTerminal={closeTerminal}
-            onHeightChange={(height) =>
-              dispatch({
-                type: "SET_THREAD_TERMINAL_HEIGHT",
-                threadId: activeThread.id,
-                height,
-              })
-            }
+            onHeightChange={setTerminalHeight}
           />
         );
       })()}
