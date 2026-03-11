@@ -137,9 +137,7 @@ export class OpenCodeSseClient {
         });
 
         if (!response.ok) {
-          console.error(
-            `[OpenCodeSseClient] SSE connection failed: HTTP ${response.status}`,
-          );
+          console.error(`[OpenCodeSseClient] SSE connection failed: HTTP ${response.status}`);
           this.scheduleReconnect();
           return;
         }

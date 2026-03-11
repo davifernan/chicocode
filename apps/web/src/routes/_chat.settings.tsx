@@ -349,9 +349,7 @@ function SettingsRouteView() {
                   <Input
                     id="opencode-binary-path"
                     value={opencodeBinaryPath}
-                    onChange={(event) =>
-                      updateSettings({ opencodeBinaryPath: event.target.value })
-                    }
+                    onChange={(event) => updateSettings({ opencodeBinaryPath: event.target.value })}
                     placeholder="opencode"
                     spellCheck={false}
                   />

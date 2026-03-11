@@ -909,9 +909,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
     const hasCodexOverrides = Boolean(settings.codexBinaryPath || settings.codexHomePath);
-    const hasOpenCodeOverrides = Boolean(
-      settings.opencodeServerUrl || settings.opencodeBinaryPath,
-    );
+    const hasOpenCodeOverrides = Boolean(settings.opencodeServerUrl || settings.opencodeBinaryPath);
     if (!hasCodexOverrides && !hasOpenCodeOverrides) {
       return undefined;
     }
@@ -928,9 +926,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         ? {
             opencode: {
               ...(settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : {}),
-              ...(settings.opencodeBinaryPath
-                ? { binaryPath: settings.opencodeBinaryPath }
-                : {}),
+              ...(settings.opencodeBinaryPath ? { binaryPath: settings.opencodeBinaryPath } : {}),
             },
           }
         : {}),
@@ -5677,9 +5673,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
-const COMING_SOON_PROVIDER_OPTIONS = [
-  { id: "gemini", label: "Gemini", icon: Gemini },
-] as const;
+const COMING_SOON_PROVIDER_OPTIONS = [{ id: "gemini", label: "Gemini", icon: Gemini }] as const;
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];

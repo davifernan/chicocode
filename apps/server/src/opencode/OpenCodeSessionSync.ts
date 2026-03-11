@@ -16,7 +16,10 @@
 import crypto from "node:crypto";
 
 import type { OpenCodeClient } from "./OpenCodeClient.ts";
-import type { DiscoveredOpenCodeSession, OpenCodeSessionDiscovery } from "./OpenCodeSessionDiscovery.ts";
+import type {
+  DiscoveredOpenCodeSession,
+  OpenCodeSessionDiscovery,
+} from "./OpenCodeSessionDiscovery.ts";
 import { canonicalizeWorkspacePath } from "./workspaceIdentity.ts";
 
 // ---------------------------------------------------------------------------

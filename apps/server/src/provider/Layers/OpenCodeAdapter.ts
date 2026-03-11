@@ -16,12 +16,7 @@
  *
  * @module OpenCodeAdapterLive
  */
-import {
-  type ProviderRuntimeEvent,
-  EventId,
-  ThreadId,
-  TurnId,
-} from "@t3tools/contracts";
+import { type ProviderRuntimeEvent, EventId, ThreadId, TurnId } from "@t3tools/contracts";
 import { Effect, Layer, Queue, Stream } from "effect";
 
 import {
@@ -49,11 +44,7 @@ function toMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
-function toRequestError(
-  threadId: ThreadId,
-  method: string,
-  cause: unknown,
-): ProviderAdapterError {
+function toRequestError(threadId: ThreadId, method: string, cause: unknown): ProviderAdapterError {
   return new ProviderAdapterRequestError({
     provider: PROVIDER,
     method,
@@ -75,7 +66,7 @@ function nowIso(): string {
 interface OpenCodeSessionState {
   readonly sessionId: string;
   readonly directory: string;
-  activeTurnId: string | null;
+  activeTurnId: TurnId | null;
 }
 
 /**
@@ -92,7 +83,7 @@ function mapSseToRuntimeEvents(
   const { type: eventType, properties } = sseEvent.payload;
   const baseFields = {
     eventId: EventId.makeUnsafe(makeEventId()),
-    provider: PROVIDER as const,
+    provider: PROVIDER,
     threadId,
     createdAt: nowIso(),
     raw: {
@@ -121,9 +112,7 @@ function mapSseToRuntimeEvents(
     case "message.created": {
       const role = properties.role as string | undefined;
       if (role === "assistant") {
-        const turnId = TurnId.makeUnsafe(
-          (properties.id as string | undefined) ?? makeEventId(),
-        );
+        const turnId = TurnId.makeUnsafe((properties.id as string | undefined) ?? makeEventId());
         sessionState.activeTurnId = turnId;
         return [
           {
@@ -146,9 +135,7 @@ function mapSseToRuntimeEvents(
         return [
           {
             ...baseFields,
-            ...(sessionState.activeTurnId
-              ? { turnId: sessionState.activeTurnId }
-              : {}),
+            ...(sessionState.activeTurnId ? { turnId: sessionState.activeTurnId } : {}),
             type: "session.state.changed",
             payload: {
               state: "running",
@@ -164,13 +151,9 @@ function mapSseToRuntimeEvents(
       if (role === "assistant") {
         const turnId =
           sessionState.activeTurnId ??
-          TurnId.makeUnsafe(
-            (properties.id as string | undefined) ?? makeEventId(),
-          );
+          TurnId.makeUnsafe((properties.id as string | undefined) ?? makeEventId());
         const cost = properties.cost as number | undefined;
-        const tokens = properties.tokens as
-          | { input?: number; output?: number }
-          | undefined;
+        const tokens = properties.tokens as { input?: number; output?: number } | undefined;
         sessionState.activeTurnId = null;
         return [
           {
@@ -196,9 +179,7 @@ function mapSseToRuntimeEvents(
         return [
           {
             ...baseFields,
-            ...(sessionState.activeTurnId
-              ? { turnId: sessionState.activeTurnId }
-              : {}),
+            ...(sessionState.activeTurnId ? { turnId: sessionState.activeTurnId } : {}),
             type: "content.delta",
             payload: {
               streamKind: "assistant_text",
@@ -212,9 +193,7 @@ function mapSseToRuntimeEvents(
         return [
           {
             ...baseFields,
-            ...(sessionState.activeTurnId
-              ? { turnId: sessionState.activeTurnId }
-              : {}),
+            ...(sessionState.activeTurnId ? { turnId: sessionState.activeTurnId } : {}),
             type: "item.started",
             payload: {
               itemType: "mcp_tool_call",
@@ -234,9 +213,7 @@ function mapSseToRuntimeEvents(
         return [
           {
             ...baseFields,
-            ...(sessionState.activeTurnId
-              ? { turnId: sessionState.activeTurnId }
-              : {}),
+            ...(sessionState.activeTurnId ? { turnId: sessionState.activeTurnId } : {}),
             type: "item.completed",
             payload: {
               itemType: "mcp_tool_call",
@@ -316,15 +293,19 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       }
 
       const serverUrl =
-        options?.serverUrl ??
-        process.env.OPENCODE_SERVER_URL ??
-        `http://127.0.0.1:4096`;
+        options?.serverUrl ?? process.env.OPENCODE_SERVER_URL ?? `http://127.0.0.1:4096`;
 
       // First try attaching to an existing server.
       const attached = yield* Effect.tryPromise({
         try: () => processManager.attach(serverUrl),
-        catch: () => false as const,
-      });
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: "" as any,
+            detail: "Failed to attach to OpenCode server",
+            cause,
+          }),
+      }).pipe(Effect.orElseSucceed(() => false as const));
 
       if (!attached) {
         // Start a fresh server.
@@ -355,10 +336,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
           let targetState: OpenCodeSessionState | undefined;
 
           for (const [tid, state] of sessions) {
-            if (
-              sseEvent.directory === undefined ||
-              sseEvent.directory === state.directory
-            ) {
+            if (sseEvent.directory === undefined || sseEvent.directory === state.directory) {
               targetThreadId = tid as ThreadId;
               targetState = state;
               break;
@@ -376,16 +354,10 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
             }
           }
 
-          const runtimeEvents = mapSseToRuntimeEvents(
-            sseEvent,
-            targetThreadId,
-            targetState,
-          );
+          const runtimeEvents = mapSseToRuntimeEvents(sseEvent, targetThreadId, targetState);
           if (runtimeEvents.length === 0) return;
 
-          Queue.offerAll(runtimeEventQueue, runtimeEvents).pipe(
-            Effect.runPromiseWith(services),
-          );
+          Queue.offerAll(runtimeEventQueue, runtimeEvents).pipe(Effect.runPromiseWith(services));
         };
         sseClient.onEvent(handler);
         return handler;
@@ -454,12 +426,10 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       Effect.gen(function* () {
         const state = sessions.get(input.threadId);
         if (!state) {
-          return yield* Effect.fail(
-            new ProviderAdapterSessionNotFoundError({
-              provider: PROVIDER,
-              threadId: input.threadId,
-            }),
-          );
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
         }
 
         const client = processManager.createClient();
@@ -467,8 +437,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         const turnId = TurnId.makeUnsafe(makeEventId());
 
         yield* Effect.tryPromise({
-          try: () =>
-            client.sendPromptAsync(state.sessionId, message, state.directory),
+          try: () => client.sendPromptAsync(state.sessionId, message, state.directory),
           catch: (cause) => toRequestError(input.threadId, "sendTurn", cause),
         });
 
@@ -507,11 +476,8 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
     ) =>
       // OpenCode doesn't have the same approval flow as Codex.
       // This is a no-op for now; will be extended in a later phase.
-      Effect.gen(function* () {
-        yield* Effect.logDebug(
-          "OpenCode adapter: respondToRequest is a no-op in simplified adapter",
-          { threadId },
-        );
+      Effect.logDebug("OpenCode adapter: respondToRequest is a no-op in simplified adapter", {
+        threadId,
       });
 
     const respondToUserInput: OpenCodeAdapterShape["respondToUserInput"] = (
@@ -519,11 +485,8 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       _requestId,
       _answers,
     ) =>
-      Effect.gen(function* () {
-        yield* Effect.logDebug(
-          "OpenCode adapter: respondToUserInput is a no-op in simplified adapter",
-          { threadId },
-        );
+      Effect.logDebug("OpenCode adapter: respondToUserInput is a no-op in simplified adapter", {
+        threadId,
       });
 
     const stopSession: OpenCodeAdapterShape["stopSession"] = (threadId) =>
@@ -535,7 +498,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       Effect.sync(() => {
         const now = nowIso();
         return Array.from(sessions.entries()).map(([threadId, state]) => ({
-          provider: PROVIDER as const,
+          provider: PROVIDER,
           status: "ready" as const,
           runtimeMode: "full-access" as const,
           cwd: state.directory,
@@ -578,10 +541,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       });
     };
 
-    const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = (
-      threadId,
-      _numTurns,
-    ) =>
+    const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = (threadId, _numTurns) =>
       // OpenCode doesn't natively support rollback. Return current state.
       readThread(threadId);
 
@@ -610,10 +570,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
     } satisfies OpenCodeAdapterShape;
   });
 
-export const OpenCodeAdapterLive = Layer.effect(
-  OpenCodeAdapter,
-  makeOpenCodeAdapter(),
-);
+export const OpenCodeAdapterLive = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter());
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
   return Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(options));

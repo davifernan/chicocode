@@ -26,8 +26,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
   Effect.gen(function* () {
     const codex = yield* CodexAdapter;
     const opencode = yield* OpenCodeAdapter;
-    const adapters =
-      options?.adapters !== undefined ? options.adapters : [codex, opencode];
+    const adapters = options?.adapters !== undefined ? options.adapters : [codex, opencode];
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {

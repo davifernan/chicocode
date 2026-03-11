@@ -427,14 +427,14 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
       }
     },
     catch: () => ({ healthy: false, reachable: false }),
-  });
+  }).pipe(Effect.orElseSucceed(() => ({ healthy: false, reachable: false }) as const));
 
   // Probe 2: Check if auth.json exists and has valid entries.
   const authManager = new OpenCodeAuthManager();
   const authStatus = yield* Effect.tryPromise({
     try: () => authManager.getAuthStatus(),
     catch: () => "unknown" as const,
-  });
+  }).pipe(Effect.orElseSucceed(() => "unknown" as const));
 
   // If the server is not reachable, check for the opencode binary.
   if (!healthProbe.reachable) {
@@ -451,9 +451,7 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
     ];
     let binaryFound = false;
     for (const binPath of commonPaths) {
-      const exists = yield* fileSystem
-        .exists(binPath)
-        .pipe(Effect.orElseSucceed(() => false));
+      const exists = yield* fileSystem.exists(binPath).pipe(Effect.orElseSucceed(() => false));
       if (exists) {
         binaryFound = true;
         break;
@@ -478,8 +476,7 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
       available: true,
       authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
       checkedAt,
-      message:
-        "OpenCode binary found but server is not running. It will be started on first use.",
+      message: "OpenCode binary found but server is not running. It will be started on first use.",
     };
   }
 

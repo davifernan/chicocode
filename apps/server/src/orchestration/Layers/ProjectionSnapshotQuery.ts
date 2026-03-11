@@ -513,9 +513,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ...(row.providerSessionId !== null
                 ? { providerSessionId: row.providerSessionId }
                 : {}),
-              ...(row.providerThreadId !== null
-                ? { providerThreadId: row.providerThreadId }
-                : {}),
+              ...(row.providerThreadId !== null ? { providerThreadId: row.providerThreadId } : {}),
               runtimeMode: row.runtimeMode,
               activeTurnId: row.activeTurnId,
               lastError: row.lastError,
@@ -543,9 +541,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             interactionMode: row.interactionMode,
             ...(row.providerKind !== null ? { provider: row.providerKind } : {}),
             ...(row.source !== null ? { source: row.source } : {}),
-            ...(row.externalSessionId !== null
-              ? { externalSessionId: row.externalSessionId }
-              : {}),
+            ...(row.externalSessionId !== null ? { externalSessionId: row.externalSessionId } : {}),
             ...(row.externalThreadId !== null ? { externalThreadId: row.externalThreadId } : {}),
             branch: row.branch,
             worktreePath: row.worktreePath,
