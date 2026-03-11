@@ -48,6 +48,13 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     placeholder: "your-codex-model-slug",
     example: "gpt-6.7-codex-ultra-preview",
   },
+  {
+    provider: "opencode",
+    title: "OpenCode",
+    description: "Save additional OpenCode model slugs for the picker and `/model` command.",
+    placeholder: "your-opencode-model-slug",
+    example: "claude-opus-4-20251201",
+  },
 ] as const;
 
 function getCustomModelsForProvider(
@@ -55,6 +62,8 @@ function getCustomModelsForProvider(
   provider: ProviderKind,
 ) {
   switch (provider) {
+    case "opencode":
+      return settings.customOpenCodeModels;
     case "codex":
     default:
       return settings.customCodexModels;
@@ -66,6 +75,8 @@ function getDefaultCustomModelsForProvider(
   provider: ProviderKind,
 ) {
   switch (provider) {
+    case "opencode":
+      return defaults.customOpenCodeModels;
     case "codex":
     default:
       return defaults.customCodexModels;
@@ -74,6 +85,8 @@ function getDefaultCustomModelsForProvider(
 
 function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
+    case "opencode":
+      return { customOpenCodeModels: models };
     case "codex":
     default:
       return { customCodexModels: models };
@@ -90,6 +103,7 @@ function SettingsRouteView() {
     Record<ProviderKind, string>
   >({
     codex: "",
+    opencode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -97,6 +111,8 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const opencodeServerUrl = settings.opencodeServerUrl;
+  const opencodeBinaryPath = settings.opencodeBinaryPath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
 
   const openKeybindingsFile = useCallback(() => {
@@ -299,6 +315,70 @@ function SettingsRouteView() {
                     }
                   >
                     Reset codex overrides
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">OpenCode Server</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  These overrides apply to new OpenCode sessions and let you connect to a custom
+                  OpenCode server instance.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="opencode-server-url" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Server URL</span>
+                  <Input
+                    id="opencode-server-url"
+                    value={opencodeServerUrl}
+                    onChange={(event) => updateSettings({ opencodeServerUrl: event.target.value })}
+                    placeholder="http://localhost:13337"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Leave blank to auto-start a local OpenCode server.
+                  </span>
+                </label>
+
+                <label htmlFor="opencode-binary-path" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">OpenCode binary path</span>
+                  <Input
+                    id="opencode-binary-path"
+                    value={opencodeBinaryPath}
+                    onChange={(event) =>
+                      updateSettings({ opencodeBinaryPath: event.target.value })
+                    }
+                    placeholder="opencode"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Leave blank to use <code>opencode</code> from your PATH.
+                  </span>
+                </label>
+
+                <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p>Server URL</p>
+                    <p className="mt-1 break-all font-mono text-[11px] text-foreground">
+                      {opencodeServerUrl || "auto"}
+                    </p>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="self-start"
+                    onClick={() =>
+                      updateSettings({
+                        opencodeServerUrl: defaults.opencodeServerUrl,
+                        opencodeBinaryPath: defaults.opencodeBinaryPath,
+                      })
+                    }
+                  >
+                    Reset opencode overrides
                   </Button>
                 </div>
               </div>

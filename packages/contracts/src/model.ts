@@ -10,8 +10,14 @@ export const CodexModelOptions = Schema.Struct({
 });
 export type CodexModelOptions = typeof CodexModelOptions.Type;
 
+export const OpenCodeModelOptions = Schema.Struct({
+  agent: Schema.optional(Schema.Literals(["build", "plan"])),
+});
+export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
+  opencode: Schema.optional(OpenCodeModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -28,6 +34,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
     { slug: "gpt-5.2", name: "GPT-5.2" },
   ],
+  opencode: [
+    { slug: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
+    { slug: "claude-opus-4-20250918", name: "Claude Opus 4" },
+    { slug: "o3", name: "o3" },
+    { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+    { slug: "gpt-4.1", name: "GPT-4.1" },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelOption[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -36,6 +49,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 
 export const DEFAULT_MODEL_BY_PROVIDER = {
   codex: "gpt-5.4",
+  opencode: "claude-sonnet-4-20250514",
 } as const satisfies Record<ProviderKind, ModelSlug>;
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
@@ -46,12 +60,20 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
     "5.3-spark": "gpt-5.3-codex-spark",
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
+  opencode: {
+    sonnet: "claude-sonnet-4-20250514",
+    opus: "claude-opus-4-20250918",
+    o3: "o3",
+    gemini: "gemini-2.5-pro",
+  },
 } as const satisfies Record<ProviderKind, Record<string, ModelSlug>>;
 
 export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {
   codex: CODEX_REASONING_EFFORT_OPTIONS,
+  opencode: CODEX_REASONING_EFFORT_OPTIONS,
 } as const satisfies Record<ProviderKind, readonly CodexReasoningEffort[]>;
 
 export const DEFAULT_REASONING_EFFORT_BY_PROVIDER = {
   codex: "high",
+  opencode: null,
 } as const satisfies Record<ProviderKind, CodexReasoningEffort | null>;

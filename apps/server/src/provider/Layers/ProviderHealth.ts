@@ -23,6 +23,7 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
+import { OpenCodeAuthManager } from "../../opencode/OpenCodeAuthManager";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
@@ -390,18 +391,145 @@ export const checkCodexProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── OpenCode health check ───────────────────────────────────────────
+
+const OPENCODE_PROVIDER = "opencode" as const;
+const OPENCODE_DEFAULT_URL = "http://127.0.0.1:4096";
+
+export const checkOpenCodeProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  FileSystem.FileSystem | Path.Path
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+
+  // Probe 1: Try to reach the OpenCode server via /global/health.
+  const serverUrl = process.env.OPENCODE_SERVER_URL ?? OPENCODE_DEFAULT_URL;
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
+  const password = process.env.OPENCODE_SERVER_PASSWORD ?? "";
+
+  const healthProbe = yield* Effect.tryPromise({
+    try: async () => {
+      const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
+      const resp = await globalThis.fetch(`${serverUrl}/global/health`, {
+        method: "GET",
+        headers: { Authorization: authHeader },
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+      if (!resp.ok) {
+        return { healthy: false, reachable: true };
+      }
+      try {
+        const body = (await resp.json()) as { healthy?: boolean; version?: string };
+        return { healthy: body.healthy === true, reachable: true, version: body.version };
+      } catch {
+        return { healthy: true, reachable: true };
+      }
+    },
+    catch: () => ({ healthy: false, reachable: false }),
+  });
+
+  // Probe 2: Check if auth.json exists and has valid entries.
+  const authManager = new OpenCodeAuthManager();
+  const authStatus = yield* Effect.tryPromise({
+    try: () => authManager.getAuthStatus(),
+    catch: () => "unknown" as const,
+  });
+
+  // If the server is not reachable, check for the opencode binary.
+  if (!healthProbe.reachable) {
+    // OpenCode server is not running — check if the CLI is at least installed.
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    // Check common install locations for the opencode binary.
+    const homeDir = OS.homedir();
+    const commonPaths = [
+      path.join(homeDir, ".local", "bin", "opencode"),
+      path.join(homeDir, "go", "bin", "opencode"),
+      "/usr/local/bin/opencode",
+    ];
+    let binaryFound = false;
+    for (const binPath of commonPaths) {
+      const exists = yield* fileSystem
+        .exists(binPath)
+        .pipe(Effect.orElseSucceed(() => false));
+      if (exists) {
+        binaryFound = true;
+        break;
+      }
+    }
+
+    if (!binaryFound) {
+      return {
+        provider: OPENCODE_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+        checkedAt,
+        message:
+          "OpenCode server is not running and the `opencode` binary was not found at common locations.",
+      };
+    }
+
+    return {
+      provider: OPENCODE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+      checkedAt,
+      message:
+        "OpenCode binary found but server is not running. It will be started on first use.",
+    };
+  }
+
+  if (!healthProbe.healthy) {
+    return {
+      provider: OPENCODE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+      checkedAt,
+      message: "OpenCode server is reachable but reports unhealthy.",
+    };
+  }
+
+  // Server is healthy.
+  const authStatusFinal: ServerProviderAuthStatus =
+    authStatus === "authenticated"
+      ? "authenticated"
+      : authStatus === "unauthenticated"
+        ? "unauthenticated"
+        : "unknown";
+  return {
+    provider: OPENCODE_PROVIDER,
+    status: authStatusFinal === "unauthenticated" ? ("warning" as const) : ("ready" as const),
+    available: true,
+    authStatus: authStatusFinal,
+    checkedAt,
+    ...(authStatusFinal === "unauthenticated"
+      ? {
+          message:
+            "OpenCode server is running but no valid authentication entries found in auth.json.",
+        }
+      : {}),
+  } satisfies ServerProviderStatus;
+});
+
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const codexStatusFiber = yield* checkCodexProviderStatus.pipe(
-      Effect.map(Array.of),
-      Effect.forkScoped,
-    );
+    const codexStatusFiber = yield* checkCodexProviderStatus.pipe(Effect.forkScoped);
+    const openCodeStatusFiber = yield* checkOpenCodeProviderStatus.pipe(Effect.forkScoped);
 
     return {
-      getStatuses: Fiber.join(codexStatusFiber),
+      getStatuses: Effect.gen(function* () {
+        const codexStatuses = yield* Fiber.join(codexStatusFiber).pipe(Effect.map(Array.of));
+        const openCodeStatus = yield* Fiber.join(openCodeStatusFiber);
+        return [...codexStatuses, openCodeStatus];
+      }),
     } satisfies ProviderHealthShape;
   }),
 );

@@ -879,7 +879,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     selectedProvider,
     activeThread?.model ?? activeProject?.model ?? getDefaultModel(selectedProvider),
   );
-  const customModelsForSelectedProvider = settings.customCodexModels;
+  const customModelsForSelectedProvider =
+    selectedProvider === "opencode" ? settings.customOpenCodeModels : settings.customCodexModels;
   const selectedModel = useMemo(() => {
     const draftModel = composerDraft.model;
     if (!draftModel) {
@@ -907,16 +908,39 @@ export default function ChatView({ threadId }: ChatViewProps) {
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
-    if (!settings.codexBinaryPath && !settings.codexHomePath) {
+    const hasCodexOverrides = Boolean(settings.codexBinaryPath || settings.codexHomePath);
+    const hasOpenCodeOverrides = Boolean(
+      settings.opencodeServerUrl || settings.opencodeBinaryPath,
+    );
+    if (!hasCodexOverrides && !hasOpenCodeOverrides) {
       return undefined;
     }
     return {
-      codex: {
-        ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
-        ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
-      },
+      ...(hasCodexOverrides
+        ? {
+            codex: {
+              ...(settings.codexBinaryPath ? { binaryPath: settings.codexBinaryPath } : {}),
+              ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+            },
+          }
+        : {}),
+      ...(hasOpenCodeOverrides
+        ? {
+            opencode: {
+              ...(settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : {}),
+              ...(settings.opencodeBinaryPath
+                ? { binaryPath: settings.opencodeBinaryPath }
+                : {}),
+            },
+          }
+        : {}),
     };
-  }, [settings.codexBinaryPath, settings.codexHomePath]);
+  }, [
+    settings.codexBinaryPath,
+    settings.codexHomePath,
+    settings.opencodeServerUrl,
+    settings.opencodeBinaryPath,
+  ]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -5654,20 +5678,22 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 const COMING_SOON_PROVIDER_OPTIONS = [
-  { id: "opencode", label: "OpenCode", icon: OpenCodeIcon },
   { id: "gemini", label: "Gemini", icon: Gemini },
 ] as const;
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customOpenCodeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    opencode: getAppModelOptions("opencode", settings.customOpenCodeModels),
   };
 }
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
+  opencode: OpenCodeIcon,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
 };

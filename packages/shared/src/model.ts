@@ -12,6 +12,7 @@ type CatalogProvider = keyof typeof MODEL_OPTIONS_BY_PROVIDER;
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<CatalogProvider, ReadonlySet<ModelSlug>> = {
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
+  opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
 };
 
 export function getModelOptions(provider: ProviderKind = "codex") {
@@ -64,10 +65,13 @@ export function resolveModelSlugForProvider(
 export function getReasoningEffortOptions(
   provider: ProviderKind = "codex",
 ): ReadonlyArray<CodexReasoningEffort> {
-  return provider === "codex" ? CODEX_REASONING_EFFORT_OPTIONS : [];
+  if (provider === "codex") return CODEX_REASONING_EFFORT_OPTIONS;
+  if (provider === "opencode") return [];
+  return [];
 }
 
 export function getDefaultReasoningEffort(provider: "codex"): CodexReasoningEffort;
+export function getDefaultReasoningEffort(provider: "opencode"): null;
 export function getDefaultReasoningEffort(provider: ProviderKind): CodexReasoningEffort | null;
 export function getDefaultReasoningEffort(
   provider: ProviderKind = "codex",

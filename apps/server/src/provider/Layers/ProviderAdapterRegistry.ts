@@ -1,7 +1,7 @@
 /**
  * ProviderAdapterRegistryLive - In-memory provider adapter lookup layer.
  *
- * Binds provider kinds (codex/cursor/...) to concrete adapter services.
+ * Binds provider kinds (codex/opencode/...) to concrete adapter services.
  * This layer only performs adapter lookup; it does not route session-scoped
  * calls or own provider lifecycle workflows.
  *
@@ -16,6 +16,7 @@ import {
   type ProviderAdapterRegistryShape,
 } from "../Services/ProviderAdapterRegistry.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
+import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 
 export interface ProviderAdapterRegistryLiveOptions {
   readonly adapters?: ReadonlyArray<ProviderAdapterShape<ProviderAdapterError>>;
@@ -23,7 +24,10 @@ export interface ProviderAdapterRegistryLiveOptions {
 
 const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOptions) =>
   Effect.gen(function* () {
-    const adapters = options?.adapters !== undefined ? options.adapters : [yield* CodexAdapter];
+    const codex = yield* CodexAdapter;
+    const opencode = yield* OpenCodeAdapter;
+    const adapters =
+      options?.adapters !== undefined ? options.adapters : [codex, opencode];
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {

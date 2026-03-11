@@ -10,8 +10,10 @@ import {
   IsoDateTime,
   ProjectId,
   ProviderInteractionMode,
+  ProviderKind,
   RuntimeMode,
   ThreadId,
+  ThreadSource,
   TurnId,
 } from "@t3tools/contracts";
 import { Option, Schema, ServiceMap } from "effect";
@@ -26,6 +28,10 @@ export const ProjectionThread = Schema.Struct({
   model: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  providerKind: Schema.NullOr(ProviderKind),
+  source: Schema.NullOr(ThreadSource),
+  externalSessionId: Schema.NullOr(Schema.String),
+  externalThreadId: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),

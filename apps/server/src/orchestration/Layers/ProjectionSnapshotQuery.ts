@@ -159,6 +159,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model,
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          provider_kind AS "providerKind",
+          source,
+          external_session_id AS "externalSessionId",
+          external_thread_id AS "externalThreadId",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -506,6 +510,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               threadId: row.threadId,
               status: row.status,
               providerName: row.providerName,
+              ...(row.providerSessionId !== null
+                ? { providerSessionId: row.providerSessionId }
+                : {}),
+              ...(row.providerThreadId !== null
+                ? { providerThreadId: row.providerThreadId }
+                : {}),
               runtimeMode: row.runtimeMode,
               activeTurnId: row.activeTurnId,
               lastError: row.lastError,
@@ -531,6 +541,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             model: row.model,
             runtimeMode: row.runtimeMode,
             interactionMode: row.interactionMode,
+            ...(row.providerKind !== null ? { provider: row.providerKind } : {}),
+            ...(row.source !== null ? { source: row.source } : {}),
+            ...(row.externalSessionId !== null
+              ? { externalSessionId: row.externalSessionId }
+              : {}),
+            ...(row.externalThreadId !== null ? { externalThreadId: row.externalThreadId } : {}),
             branch: row.branch,
             worktreePath: row.worktreePath,
             latestTurn: latestTurnByThread.get(row.threadId) ?? null,
