@@ -3,6 +3,7 @@ import type { UserInputQuestion } from "@t3tools/contracts";
 export interface PendingUserInputDraftAnswer {
   selectedOptionLabel?: string;
   customAnswer?: string;
+  prefersCustomAnswer?: boolean;
 }
 
 export interface PendingUserInputProgress {
@@ -43,12 +44,32 @@ export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
+  const prefersCustomAnswer = customAnswer.trim().length > 0 || draft?.prefersCustomAnswer === true;
   const selectedOptionLabel =
     customAnswer.trim().length > 0 ? undefined : draft?.selectedOptionLabel;
 
   return {
     customAnswer,
+    ...(prefersCustomAnswer ? { prefersCustomAnswer: true } : {}),
     ...(selectedOptionLabel ? { selectedOptionLabel } : {}),
+  };
+}
+
+export function selectPendingUserInputOption(optionLabel: string): PendingUserInputDraftAnswer {
+  return {
+    selectedOptionLabel: optionLabel,
+    customAnswer: "",
+  };
+}
+
+export function activatePendingUserInputCustomAnswer(
+  draft: PendingUserInputDraftAnswer | undefined,
+): PendingUserInputDraftAnswer {
+  const customAnswer = draft?.customAnswer ?? "";
+
+  return {
+    customAnswer,
+    prefersCustomAnswer: true,
   };
 }
 
@@ -111,7 +132,7 @@ export function derivePendingUserInputProgress(
     selectedOptionLabel: activeDraft?.selectedOptionLabel,
     customAnswer,
     resolvedAnswer,
-    usingCustomAnswer: customAnswer.trim().length > 0,
+    usingCustomAnswer: activeDraft?.prefersCustomAnswer === true || customAnswer.trim().length > 0,
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,

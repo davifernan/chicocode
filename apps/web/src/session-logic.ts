@@ -3,6 +3,7 @@ import {
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
+  type MessageId,
   type ProviderKind,
   type UserInputQuestion,
   type TurnId,
@@ -120,8 +121,22 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
   return formatDuration(endedAt - startedAt);
 }
 
-type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
+type LatestTurnTiming = Pick<
+  OrchestrationLatestTurn,
+  "turnId" | "requestedAt" | "startedAt" | "completedAt"
+> & {
+  assistantMessageId?: OrchestrationLatestTurn["assistantMessageId"];
+};
 type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
+
+function isLatestTurnActive(
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): boolean {
+  if (!latestTurn?.turnId) return false;
+  if (session?.orchestrationStatus !== "running") return false;
+  return session.activeTurnId === latestTurn.turnId;
+}
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
@@ -130,8 +145,10 @@ export function isLatestTurnSettled(
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
   if (!session) return true;
-  if (session.orchestrationStatus === "running") return false;
-  return true;
+  if (session.orchestrationStatus !== "running") return true;
+  if (!session.activeTurnId) return false;
+  if (session.activeTurnId !== latestTurn.turnId) return true;
+  return false;
 }
 
 export function deriveActiveWorkStartedAt(
@@ -139,10 +156,75 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
+  const activeLatestTurn = isLatestTurnActive(latestTurn, session) ? latestTurn : null;
+  if (activeLatestTurn) {
+    return activeLatestTurn.startedAt ?? activeLatestTurn.requestedAt ?? sendStartedAt;
   }
   return sendStartedAt;
+}
+
+export function deriveCompletedTurnSummaryByAssistantMessageId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>,
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): Map<MessageId, string> {
+  const orderedActivities = [...activities].toSorted(compareActivitiesByOrder);
+  const startedAtByTurnId = new Map<TurnId, string>();
+  const fallbackStartedAtByTurnId = new Map<TurnId, string>();
+  const completedAtByTurnId = new Map<TurnId, string>();
+  const assistantMessageIdByTurnId = new Map<TurnId, MessageId>();
+  const hasToolActivityByTurnId = new Map<TurnId, boolean>();
+
+  for (const activity of orderedActivities) {
+    if (!activity.turnId) continue;
+
+    if (!fallbackStartedAtByTurnId.has(activity.turnId)) {
+      fallbackStartedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.kind === "turn.started" && !startedAtByTurnId.has(activity.turnId)) {
+      startedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.kind === "turn.completed") {
+      completedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.tone === "tool") {
+      hasToolActivityByTurnId.set(activity.turnId, true);
+    }
+  }
+
+  for (const summary of turnDiffSummaries) {
+    completedAtByTurnId.set(summary.turnId, summary.completedAt);
+    if (summary.assistantMessageId) {
+      assistantMessageIdByTurnId.set(summary.turnId, summary.assistantMessageId);
+    }
+  }
+
+  if (latestTurn?.assistantMessageId && isLatestTurnSettled(latestTurn, session)) {
+    assistantMessageIdByTurnId.set(latestTurn.turnId, latestTurn.assistantMessageId);
+    if (latestTurn.completedAt) {
+      completedAtByTurnId.set(latestTurn.turnId, latestTurn.completedAt);
+    }
+  }
+
+  const result = new Map<MessageId, string>();
+  for (const [turnId, assistantMessageId] of assistantMessageIdByTurnId) {
+    if (!hasToolActivityByTurnId.get(turnId)) {
+      continue;
+    }
+    const startedAt = startedAtByTurnId.get(turnId) ?? fallbackStartedAtByTurnId.get(turnId);
+    const completedAt = completedAtByTurnId.get(turnId);
+    if (!startedAt || !completedAt) {
+      continue;
+    }
+    const elapsed = formatElapsed(startedAt, completedAt);
+    if (!elapsed) {
+      continue;
+    }
+    result.set(assistantMessageId, `Worked for ${elapsed}`);
+  }
+
+  return result;
 }
 
 function requestKindFromRequestType(requestType: unknown): PendingApproval["requestKind"] | null {

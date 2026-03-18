@@ -136,10 +136,28 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const replaceByThreadId: ProjectionThreadMessageRepositoryShape["replaceByThreadId"] = (input) =>
+    sql
+      .withTransaction(
+        deleteProjectionThreadMessageRows({ threadId: input.threadId }).pipe(
+          Effect.flatMap(() =>
+            Effect.forEach(input.messages, upsertProjectionThreadMessageRow, {
+              concurrency: 1,
+            }).pipe(Effect.asVoid),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionThreadMessageRepository.replaceByThreadId:query"),
+        ),
+      );
+
   return {
     upsert,
     listByThreadId,
     deleteByThreadId,
+    replaceByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });
 

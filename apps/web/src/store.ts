@@ -1,10 +1,11 @@
-import { Fragment, type ReactNode, createElement, useEffect } from "react";
+import { Fragment, type ReactNode, createElement } from "react";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   type ProviderKind,
   ThreadId,
-  type OrchestrationReadModel,
+  type OrchestrationSummaryReadModel,
   type OrchestrationSessionStatus,
+  type OrchestrationThreadMessagesResult,
 } from "@t3tools/contracts";
 import {
   getModelOptions,
@@ -15,6 +16,9 @@ import {
 import { create } from "zustand";
 import { type ChatMessage, type Project, type Thread } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
+import { SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS, type SidebarOpenProjectLimit } from "./appSettings";
+
+import { persistServerUiState } from "./serverUiState";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -42,52 +46,84 @@ const initialState: AppState = {
   threads: [],
   threadsHydrated: false,
 };
+type PersistedRendererState = {
+  expandedProjectCwds?: string[];
+  projectOrderCwds?: string[];
+  starredThreadIds?: string[];
+};
+
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
+const persistedStarredThreadIds = new Set<ThreadId>();
 
 // ── Persist helpers ──────────────────────────────────────────────────
 
-function readPersistedState(): AppState {
-  if (typeof window === "undefined") return initialState;
-  try {
-    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
-    if (!raw) return initialState;
-    const parsed = JSON.parse(raw) as {
-      expandedProjectCwds?: string[];
-      projectOrderCwds?: string[];
-    };
-    persistedExpandedProjectCwds.clear();
-    persistedProjectOrderCwds.length = 0;
-    for (const cwd of parsed.expandedProjectCwds ?? []) {
-      if (typeof cwd === "string" && cwd.length > 0) {
-        persistedExpandedProjectCwds.add(cwd);
-      }
+function applyPersistedRendererState(parsed: PersistedRendererState): void {
+  persistedExpandedProjectCwds.clear();
+  persistedProjectOrderCwds.length = 0;
+  persistedStarredThreadIds.clear();
+
+  for (const cwd of parsed.expandedProjectCwds ?? []) {
+    if (typeof cwd === "string" && cwd.length > 0) {
+      persistedExpandedProjectCwds.add(cwd);
     }
-    for (const cwd of parsed.projectOrderCwds ?? []) {
-      if (typeof cwd === "string" && cwd.length > 0 && !persistedProjectOrderCwds.includes(cwd)) {
-        persistedProjectOrderCwds.push(cwd);
-      }
-    }
-    return { ...initialState };
-  } catch {
-    return initialState;
   }
+  for (const cwd of parsed.projectOrderCwds ?? []) {
+    if (typeof cwd === "string" && cwd.length > 0 && !persistedProjectOrderCwds.includes(cwd)) {
+      persistedProjectOrderCwds.push(cwd);
+    }
+  }
+  for (const threadId of parsed.starredThreadIds ?? []) {
+    if (typeof threadId === "string" && threadId.length > 0) {
+      persistedStarredThreadIds.add(threadId as ThreadId);
+    }
+  }
+}
+
+function parsePersistedRendererState(raw: string | null): void {
+  if (!raw) {
+    applyPersistedRendererState({});
+    return;
+  }
+
+  try {
+    applyPersistedRendererState(JSON.parse(raw) as PersistedRendererState);
+  } catch {
+    applyPersistedRendererState({});
+  }
+}
+
+function readLegacyPersistedStateValue(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.localStorage.getItem(PERSISTED_STATE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedState(): AppState {
+  parsePersistedRendererState(readLegacyPersistedStateValue());
+  return { ...initialState };
 }
 
 let legacyKeysCleanedUp = false;
 
-function persistState(state: AppState): void {
-  if (typeof window === "undefined") return;
+function writeLegacyPersistedStateValue(value: string | null): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   try {
-    window.localStorage.setItem(
-      PERSISTED_STATE_KEY,
-      JSON.stringify({
-        expandedProjectCwds: state.projects
-          .filter((project) => project.expanded)
-          .map((project) => project.cwd),
-        projectOrderCwds: state.projects.map((project) => project.cwd),
-      }),
-    );
+    if (value === null) {
+      window.localStorage.removeItem(PERSISTED_STATE_KEY);
+    } else {
+      window.localStorage.setItem(PERSISTED_STATE_KEY, value);
+    }
+
     if (!legacyKeysCleanedUp) {
       legacyKeysCleanedUp = true;
       for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
@@ -96,6 +132,82 @@ function persistState(state: AppState): void {
     }
   } catch {
     // Ignore quota/storage errors to avoid breaking chat UX.
+  }
+}
+
+function serializePersistedState(state: AppState): string {
+  return JSON.stringify({
+    expandedProjectCwds: state.projects
+      .filter((project) => project.expanded)
+      .map((project) => project.cwd),
+    projectOrderCwds: state.projects.map((project) => project.cwd),
+    starredThreadIds: state.threads
+      .filter((thread) => thread.starred === true)
+      .map((thread) => thread.id),
+  } satisfies PersistedRendererState);
+}
+
+function applyPersistedRendererStateToStore(state: AppState): AppState {
+  const nextProjects = state.projects
+    .map((project) => {
+      const expanded = persistedExpandedProjectCwds.has(project.cwd);
+      return project.expanded === expanded ? project : { ...project, expanded };
+    })
+    .map((project, incomingIndex) => ({
+      project,
+      incomingIndex,
+      persistedIndex: persistedProjectOrderCwds.indexOf(project.cwd),
+    }))
+    .toSorted((a, b) => {
+      const aHasPersistedIndex = a.persistedIndex >= 0;
+      const bHasPersistedIndex = b.persistedIndex >= 0;
+      if (aHasPersistedIndex !== bHasPersistedIndex) {
+        return aHasPersistedIndex ? -1 : 1;
+      }
+      if (aHasPersistedIndex && bHasPersistedIndex) {
+        return a.persistedIndex - b.persistedIndex;
+      }
+      return a.incomingIndex - b.incomingIndex;
+    })
+    .map((entry) => entry.project);
+
+  const nextThreads = state.threads.map((thread) => {
+    const starred = persistedStarredThreadIds.has(thread.id);
+    return thread.starred === starred ? thread : { ...thread, starred };
+  });
+
+  const projectsChanged = nextProjects.some((project, index) => project !== state.projects[index]);
+  const threadsChanged = nextThreads.some((thread, index) => thread !== state.threads[index]);
+  if (!projectsChanged && !threadsChanged) {
+    return state;
+  }
+
+  return {
+    ...state,
+    projects: nextProjects,
+    threads: nextThreads,
+  };
+}
+
+export function readPersistedRendererStateValue(): string | null {
+  return readLegacyPersistedStateValue();
+}
+
+export function hydratePersistedRendererState(value: string | null): void {
+  parsePersistedRendererState(value);
+  writeLegacyPersistedStateValue(value);
+  useStore.setState((state) => applyPersistedRendererStateToStore(state));
+}
+
+let rendererPersistenceReady = false;
+
+function persistState(state: AppState): void {
+  if (typeof window === "undefined") return;
+
+  const raw = serializePersistedState(state);
+  writeLegacyPersistedStateValue(raw);
+  if (rendererPersistenceReady) {
+    persistServerUiState("rendererState", raw);
   }
 }
 const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
@@ -117,20 +229,51 @@ function updateThread(
   return changed ? next : threads;
 }
 
-function mapProjectsFromReadModel(
-  incoming: OrchestrationReadModel["projects"],
-  previous: Project[],
+function normalizeSidebarOpenProjectLimit(limit?: number): SidebarOpenProjectLimit {
+  return SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS.includes(limit as SidebarOpenProjectLimit)
+    ? (limit as SidebarOpenProjectLimit)
+    : 1;
+}
+
+function applyExpandedProjectLimit(
+  projects: Project[],
+  preferredExpandedIds: readonly Project["id"][],
+  maxExpandedProjects?: number,
 ): Project[] {
+  const normalizedLimit = normalizeSidebarOpenProjectLimit(maxExpandedProjects);
+  const nextExpandedIds = new Set<Project["id"]>();
+
+  for (const projectId of preferredExpandedIds) {
+    if (nextExpandedIds.has(projectId)) continue;
+    nextExpandedIds.add(projectId);
+    if (nextExpandedIds.size >= normalizedLimit) break;
+  }
+
+  return projects.map((project) => {
+    const expanded = nextExpandedIds.has(project.id);
+    return project.expanded === expanded ? project : { ...project, expanded };
+  });
+}
+
+interface MapProjectsFromReadModelOptions {
+  readonly persistedExpandedCwds?: ReadonlySet<string>;
+  readonly persistedOrderCwds?: readonly string[];
+}
+
+export function mapProjectsFromReadModel(
+  incoming: OrchestrationSummaryReadModel["projects"],
+  previous: Project[],
+  options?: MapProjectsFromReadModelOptions,
+): Project[] {
+  const expandedCwds = options?.persistedExpandedCwds ?? persistedExpandedProjectCwds;
+  const orderCwds = options?.persistedOrderCwds ?? persistedProjectOrderCwds;
   const previousById = new Map(previous.map((project) => [project.id, project] as const));
   const previousByCwd = new Map(previous.map((project) => [project.cwd, project] as const));
   const previousOrderById = new Map(previous.map((project, index) => [project.id, index] as const));
   const previousOrderByCwd = new Map(
     previous.map((project, index) => [project.cwd, index] as const),
   );
-  const persistedOrderByCwd = new Map(
-    persistedProjectOrderCwds.map((cwd, index) => [cwd, index] as const),
-  );
-  const usePersistedOrder = previous.length === 0;
+  const persistedOrderByCwd = new Map(orderCwds.map((cwd, index) => [cwd, index] as const));
 
   const mappedProjects = incoming.map((project) => {
     const existing = previousById.get(project.id) ?? previousByCwd.get(project.workspaceRoot);
@@ -143,9 +286,7 @@ function mapProjectsFromReadModel(
         resolveModelSlug(project.defaultModel ?? DEFAULT_MODEL_BY_PROVIDER.codex),
       expanded:
         existing?.expanded ??
-        (persistedExpandedProjectCwds.size > 0
-          ? persistedExpandedProjectCwds.has(project.workspaceRoot)
-          : true),
+        (expandedCwds.size > 0 ? expandedCwds.has(project.workspaceRoot) : false),
       scripts: project.scripts.map((script) => ({ ...script })),
     } satisfies Project;
   });
@@ -154,14 +295,14 @@ function mapProjectsFromReadModel(
     .map((project, incomingIndex) => {
       const previousIndex =
         previousOrderById.get(project.id) ?? previousOrderByCwd.get(project.cwd);
-      const persistedIndex = usePersistedOrder ? persistedOrderByCwd.get(project.cwd) : undefined;
-      const orderIndex =
-        previousIndex ??
-        persistedIndex ??
-        (usePersistedOrder ? persistedProjectOrderCwds.length : previous.length) + incomingIndex;
-      return { project, incomingIndex, orderIndex };
+      const persistedIndex = persistedOrderByCwd.get(project.cwd);
+      const sourceRank = previousIndex !== undefined ? 0 : persistedIndex !== undefined ? 1 : 2;
+      const orderIndex = previousIndex ?? persistedIndex ?? incomingIndex;
+      return { project, incomingIndex, orderIndex, sourceRank };
     })
     .toSorted((a, b) => {
+      const bySourceRank = a.sourceRank - b.sourceRank;
+      if (bySourceRank !== 0) return bySourceRank;
       const byOrder = a.orderIndex - b.orderIndex;
       if (byOrder !== 0) return byOrder;
       return a.incomingIndex - b.incomingIndex;
@@ -218,7 +359,7 @@ function inferProviderForThreadModel(input: {
   return "codex";
 }
 
-function resolveWsHttpOrigin(): string {
+export function resolveWsHttpOrigin(): string {
   if (typeof window === "undefined") return "";
   const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
   const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
@@ -250,9 +391,35 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
+function mapReadModelMessage(
+  message: OrchestrationThreadMessagesResult["messages"][number],
+): ChatMessage {
+  const attachments = message.attachments?.map((attachment) => ({
+    type: "image" as const,
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+  }));
+
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    createdAt: message.createdAt,
+    streaming: message.streaming,
+    ...(message.streaming ? {} : { completedAt: message.updatedAt }),
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  };
+}
+
 // ── Pure state transition functions ────────────────────────────────────
 
-export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
+export function syncServerReadModel(
+  state: AppState,
+  readModel: OrchestrationSummaryReadModel,
+): AppState {
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
@@ -267,6 +434,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         codexThreadId: null,
         projectId: thread.projectId,
         title: thread.title,
+        starred: existing?.starred ?? persistedStarredThreadIds.has(thread.id),
         model: resolveModelSlugForProvider(
           inferProviderForThreadModel({
             model: thread.model,
@@ -276,6 +444,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         ),
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
+        provider: thread.provider ?? undefined,
+        source: thread.source ?? undefined,
+        externalSessionId: thread.externalSessionId ?? undefined,
+        providerMetadata: thread.providerMetadata ?? undefined,
         session: thread.session
           ? {
               provider: toLegacyProvider(thread.session.providerName),
@@ -287,26 +459,19 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
               ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
             }
           : null,
-        messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
-          const normalizedMessage: ChatMessage = {
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            createdAt: message.createdAt,
-            streaming: message.streaming,
-            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          };
-          return normalizedMessage;
-        }),
+        messages:
+          existing &&
+          existing.messageCount === thread.messageCount &&
+          existing.latestMessageAt === thread.latestMessageAt
+            ? existing.messages
+            : (existing?.messages ?? []),
+        messageCount: thread.messageCount,
+        latestMessageAt: thread.latestMessageAt,
+        messagesHydrated:
+          thread.messageCount === 0 ||
+          (existing?.messagesHydrated === true &&
+            existing.messageCount === thread.messageCount &&
+            existing.latestMessageAt === thread.latestMessageAt),
         proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
           id: proposedPlan.id,
           turnId: proposedPlan.turnId,
@@ -316,6 +481,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         })),
         error: thread.session?.lastError ?? null,
         createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
         branch: thread.branch,
@@ -338,6 +504,20 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     threads,
     threadsHydrated: true,
   };
+}
+
+export function hydrateThreadMessages(
+  state: AppState,
+  result: OrchestrationThreadMessagesResult,
+): AppState {
+  const threads = updateThread(state.threads, result.threadId, (thread) => ({
+    ...thread,
+    messages: result.messages.map(mapReadModelMessage),
+    messageCount: result.messageCount,
+    latestMessageAt: result.latestMessageAt,
+    messagesHydrated: true,
+  }));
+  return threads === state.threads ? state : { ...state, threads };
 }
 
 export function markThreadVisited(
@@ -373,10 +553,43 @@ export function markThreadUnread(state: AppState, threadId: ThreadId): AppState 
   return threads === state.threads ? state : { ...state, threads };
 }
 
-export function toggleProject(state: AppState, projectId: Project["id"]): AppState {
+export function toggleThreadStarred(state: AppState, threadId: ThreadId): AppState {
+  const threads = updateThread(state.threads, threadId, (thread) => ({
+    ...thread,
+    starred: thread.starred !== true,
+  }));
+  return threads === state.threads ? state : { ...state, threads };
+}
+
+export function toggleProject(
+  state: AppState,
+  projectId: Project["id"],
+  maxExpandedProjects?: number,
+): AppState {
+  const targetProject = state.projects.find((project) => project.id === projectId);
+  if (!targetProject) return state;
+
+  if (!targetProject.expanded) {
+    const projects = applyExpandedProjectLimit(
+      state.projects,
+      [
+        projectId,
+        ...state.projects
+          .filter((project) => project.expanded)
+          .map((project) => project.id)
+          .toReversed(),
+      ],
+      maxExpandedProjects,
+    );
+    const changed = projects.some((project, index) => project !== state.projects[index]);
+    return changed ? { ...state, projects } : state;
+  }
+
   return {
     ...state,
-    projects: state.projects.map((p) => (p.id === projectId ? { ...p, expanded: !p.expanded } : p)),
+    projects: state.projects.map((project) =>
+      project.id === projectId ? { ...project, expanded: false } : project,
+    ),
   };
 }
 
@@ -384,13 +597,24 @@ export function setProjectExpanded(
   state: AppState,
   projectId: Project["id"],
   expanded: boolean,
+  maxExpandedProjects?: number,
 ): AppState {
-  let changed = false;
-  const projects = state.projects.map((p) => {
-    if (p.id !== projectId || p.expanded === expanded) return p;
-    changed = true;
-    return { ...p, expanded };
-  });
+  const projects = expanded
+    ? applyExpandedProjectLimit(
+        state.projects,
+        [
+          projectId,
+          ...state.projects
+            .filter((project) => project.expanded)
+            .map((project) => project.id)
+            .toReversed(),
+        ],
+        maxExpandedProjects,
+      )
+    : state.projects.map((project) =>
+        project.id === projectId ? { ...project, expanded: false } : project,
+      );
+  const changed = projects.some((project, index) => project !== state.projects[index]);
   return changed ? { ...state, projects } : state;
 }
 
@@ -440,11 +664,17 @@ export function setThreadBranch(
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
-  syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  syncServerReadModel: (readModel: OrchestrationSummaryReadModel) => void;
+  hydrateThreadMessages: (result: OrchestrationThreadMessagesResult) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
-  toggleProject: (projectId: Project["id"]) => void;
-  setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
+  toggleThreadStarred: (threadId: ThreadId) => void;
+  toggleProject: (projectId: Project["id"], maxExpandedProjects?: number) => void;
+  setProjectExpanded: (
+    projectId: Project["id"],
+    expanded: boolean,
+    maxExpandedProjects?: number,
+  ) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
@@ -453,12 +683,15 @@ interface AppStore extends AppState {
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
+  hydrateThreadMessages: (result) => set((state) => hydrateThreadMessages(state, result)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),
-  toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
-  setProjectExpanded: (projectId, expanded) =>
-    set((state) => setProjectExpanded(state, projectId, expanded)),
+  toggleThreadStarred: (threadId) => set((state) => toggleThreadStarred(state, threadId)),
+  toggleProject: (projectId, maxExpandedProjects) =>
+    set((state) => toggleProject(state, projectId, maxExpandedProjects)),
+  setProjectExpanded: (projectId, expanded, maxExpandedProjects) =>
+    set((state) => setProjectExpanded(state, projectId, expanded, maxExpandedProjects)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
@@ -466,8 +699,18 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
 }));
 
+export function markRendererPersistenceReady(): void {
+  rendererPersistenceReady = true;
+  persistState(useStore.getState());
+}
+
 // Persist state changes with debouncing to avoid localStorage thrashing
-useStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+useStore.subscribe((state) => {
+  if (!rendererPersistenceReady) {
+    return;
+  }
+  debouncedPersistState.maybeExecute(state);
+});
 
 // Flush pending writes synchronously before page unload to prevent data loss.
 if (typeof window !== "undefined") {
@@ -477,8 +720,5 @@ if (typeof window !== "undefined") {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    persistState(useStore.getState());
-  }, []);
   return createElement(Fragment, null, children);
 }

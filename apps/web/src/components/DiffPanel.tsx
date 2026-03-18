@@ -173,6 +173,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const activeThreadId = routeThreadId;
   const activeThread = useStore((store) =>
@@ -525,7 +526,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       className={cn(
         "flex h-full min-w-0 flex-col bg-background",
         mode === "inline"
-          ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
+          ? "w-[clamp(32rem,48vw,64rem)] min-w-[420px] max-w-[72rem] shrink-0 border-l border-border"
           : "w-full",
       )}
     >

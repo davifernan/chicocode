@@ -423,12 +423,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             model: event.payload.model,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
-            providerKind: "codex",
-            source: "native",
-            externalSessionId: null,
-            externalThreadId: null,
+            providerKind: event.payload.provider ?? "codex",
+            source: event.payload.source ?? "native",
+            externalSessionId: event.payload.externalSessionId ?? null,
+            externalThreadId: event.payload.externalThreadId ?? null,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            providerMetadata: null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -450,6 +451,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
+              : {}),
+            ...(event.payload.providerMetadata !== undefined
+              ? { providerMetadata: event.payload.providerMetadata }
               : {}),
             updatedAt: event.payload.updatedAt,
           });
@@ -503,6 +507,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "thread.message-sent":
+        case "thread.messages-imported":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended": {
           const existingRow = yield* projectionThreadRepository.getById({
@@ -513,6 +518,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            ...(event.type === "thread.messages-imported" &&
+            event.payload.providerMetadata !== undefined
+              ? { providerMetadata: event.payload.providerMetadata ?? null }
+              : {}),
             updatedAt: event.occurredAt,
           });
           return;
@@ -603,6 +612,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             isStreaming: event.payload.streaming,
             createdAt: existingMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.messages-imported": {
+          yield* projectionThreadMessageRepository.replaceByThreadId({
+            threadId: event.payload.threadId,
+            messages: event.payload.messages.map((message) => ({
+              messageId: message.messageId,
+              threadId: event.payload.threadId,
+              turnId: null,
+              role: message.role,
+              text: message.text,
+              isStreaming: false,
+              createdAt: message.createdAt,
+              updatedAt: message.createdAt,
+            })),
           });
           return;
         }

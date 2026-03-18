@@ -51,9 +51,15 @@ export class OpenCodeSseClient {
   private abortController: AbortController | null = null;
   private handlers: OpenCodeSseEventHandler[] = [];
   private connected = false;
+  private connecting = false;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
   private shouldReconnect = false;
+  private connectedWaiters: Array<{
+    readonly resolve: () => void;
+    readonly reject: (error: Error) => void;
+    readonly timer: ReturnType<typeof setTimeout>;
+  }> = [];
 
   private sseBaseUrl = "";
   private sseAuthHeader = "";
@@ -68,16 +74,55 @@ export class OpenCodeSseClient {
    * @param authHeader - Complete `Authorization` header value (e.g. `Basic ...`).
    */
   connect(baseUrl: string, authHeader: string): void {
-    if (this.connected) {
+    const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+    const sameTarget = this.sseBaseUrl === normalizedBaseUrl && this.sseAuthHeader === authHeader;
+
+    if (sameTarget && (this.connected || this.connecting)) {
+      this.shouldReconnect = true;
+      return;
+    }
+
+    if (this.connected || this.connecting || this.abortController) {
       this.disconnect();
     }
 
-    this.sseBaseUrl = baseUrl.replace(/\/+$/, "");
+    this.sseBaseUrl = normalizedBaseUrl;
     this.sseAuthHeader = authHeader;
     this.shouldReconnect = true;
     this.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
 
     this.startConnection();
+  }
+
+  /**
+   * Wait until the SSE stream is connected.
+   *
+   * Resolves immediately when the stream is already active. Otherwise waits
+   * until a connection is established or the timeout elapses.
+   */
+  waitUntilConnected(timeoutMs = 5_000): Promise<void> {
+    if (this.connected) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.connectedWaiters = this.connectedWaiters.filter((waiter) => waiter.timer !== timer);
+        reject(new Error(`Timed out waiting for OpenCode SSE connection after ${timeoutMs}ms.`));
+      }, timeoutMs);
+
+      this.connectedWaiters.push({
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+        timer,
+      });
+    });
   }
 
   /**
@@ -103,7 +148,9 @@ export class OpenCodeSseClient {
   disconnect(): void {
     this.shouldReconnect = false;
     this.connected = false;
+    this.connecting = false;
     this.clearHeartbeat();
+    this.rejectConnectedWaiters("OpenCode SSE connection was disconnected before becoming ready.");
 
     if (this.abortController) {
       this.abortController.abort();
@@ -121,8 +168,13 @@ export class OpenCodeSseClient {
   // -----------------------------------------------------------------------
 
   private startConnection(): void {
+    if (this.connecting) {
+      return;
+    }
+
     const url = `${this.sseBaseUrl}/global/event`;
     this.abortController = new AbortController();
+    this.connecting = true;
     const { signal } = this.abortController;
 
     const connect = async () => {
@@ -137,26 +189,32 @@ export class OpenCodeSseClient {
         });
 
         if (!response.ok) {
+          this.connecting = false;
           console.error(`[OpenCodeSseClient] SSE connection failed: HTTP ${response.status}`);
           this.scheduleReconnect();
           return;
         }
 
         if (!response.body) {
+          this.connecting = false;
           console.error("[OpenCodeSseClient] SSE response has no body");
           this.scheduleReconnect();
           return;
         }
 
         this.connected = true;
+        this.connecting = false;
         this.reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
         this.resetHeartbeat();
+        this.resolveConnectedWaiters();
 
         await this.consumeStream(response.body, signal);
       } catch (err) {
+        this.connecting = false;
         if (signal.aborted) return; // Intentional disconnect.
         console.error(`[OpenCodeSseClient] SSE connection error: ${String(err)}`);
       } finally {
+        this.connecting = false;
         this.connected = false;
         this.clearHeartbeat();
       }
@@ -182,6 +240,27 @@ export class OpenCodeSseClient {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let dataLines: string[] = [];
+
+    const processLines = (lines: ReadonlyArray<string>) => {
+      for (const rawLine of lines) {
+        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+        if (line.startsWith("data:")) {
+          const payload = line.slice(5).trimStart();
+          dataLines.push(payload);
+          continue;
+        }
+
+        if (line.trim() === "") {
+          if (dataLines.length > 0) {
+            const data = dataLines.join("\n");
+            this.handleData(data);
+            dataLines = [];
+          }
+        }
+      }
+    };
 
     try {
       while (!signal.aborted) {
@@ -195,26 +274,39 @@ export class OpenCodeSseClient {
         // Keep the last (potentially incomplete) line in the buffer.
         buffer = lines.pop() ?? "";
 
-        let dataLines: string[] = [];
+        processLines(lines);
+      }
 
-        for (const line of lines) {
-          if (line.startsWith("data:")) {
-            // Accumulate data lines (multi-line data fields).
-            const payload = line.slice(5).trimStart();
-            dataLines.push(payload);
-          } else if (line.trim() === "") {
-            // Empty line = end of event. Dispatch accumulated data.
-            if (dataLines.length > 0) {
-              const data = dataLines.join("\n");
-              this.handleData(data);
-              dataLines = [];
-            }
-          }
-          // Ignore `event:`, `id:`, and comment lines (`:` prefix).
-        }
+      const flushedBuffer = `${buffer}${decoder.decode()}`;
+      if (flushedBuffer.length > 0) {
+        processLines(flushedBuffer.split("\n"));
+      }
+      if (dataLines.length > 0) {
+        this.handleData(dataLines.join("\n"));
       }
     } finally {
       reader.releaseLock();
+    }
+  }
+
+  private resolveConnectedWaiters(): void {
+    const waiters = this.connectedWaiters;
+    this.connectedWaiters = [];
+    for (const waiter of waiters) {
+      waiter.resolve();
+    }
+  }
+
+  private rejectConnectedWaiters(message: string): void {
+    if (this.connectedWaiters.length === 0) {
+      return;
+    }
+
+    const waiters = this.connectedWaiters;
+    this.connectedWaiters = [];
+    const error = new Error(message);
+    for (const waiter of waiters) {
+      waiter.reject(error);
     }
   }
 

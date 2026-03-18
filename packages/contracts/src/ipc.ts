@@ -24,7 +24,7 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { ServerConfig } from "./server";
+import type { ServerConfig, ServerGetUiStateInput, ServerGetUiStateResult } from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -35,15 +35,21 @@ import type {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
-import type { ServerUpsertKeybindingInput, ServerUpsertKeybindingResult } from "./server";
+import type {
+  ServerUpsertKeybindingInput,
+  ServerUpsertKeybindingResult,
+  ServerUpsertUiStateInput,
+} from "./server";
 import type {
   ClientOrchestrationCommand,
+  OrchestrationGetThreadMessagesInput,
+  OrchestrationGetThreadMessagesResult,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
-  OrchestrationReadModel,
+  OrchestrationSummaryReadModel,
 } from "./orchestration";
 import { EditorId } from "./editor";
 
@@ -158,10 +164,15 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    getUiState: (input: ServerGetUiStateInput) => Promise<ServerGetUiStateResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    upsertUiState: (input: ServerUpsertUiStateInput) => Promise<void>;
   };
   orchestration: {
-    getSnapshot: () => Promise<OrchestrationReadModel>;
+    getSnapshot: () => Promise<OrchestrationSummaryReadModel>;
+    getThreadMessages: (
+      input: OrchestrationGetThreadMessagesInput,
+    ) => Promise<OrchestrationGetThreadMessagesResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;
     getFullThreadDiff: (

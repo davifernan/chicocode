@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
-import { Deferred, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
@@ -19,6 +19,7 @@ import {
 import { decideOrchestrationCommand } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -54,6 +55,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   let readModel = createEmptyReadModel(new Date().toISOString());
 
@@ -191,17 +193,41 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           yield* Deferred.fail(envelope.result, error);
         }),
       ),
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          if (Cause.hasInterruptsOnly(cause)) {
+            yield* Deferred.fail(
+              envelope.result,
+              new OrchestrationCommandInvariantError({
+                commandType: envelope.command.type,
+                detail: "Command processing was interrupted.",
+              }),
+            );
+            return;
+          }
+
+          yield* Effect.logError("orchestration command worker crashed with defect").pipe(
+            Effect.annotateLogs({
+              commandId: envelope.command.commandId,
+              commandType: envelope.command.type,
+              cause: Cause.pretty(cause),
+            }),
+          );
+
+          yield* Deferred.fail(
+            envelope.result,
+            new OrchestrationCommandInvariantError({
+              commandType: envelope.command.type,
+              detail: Cause.pretty(cause),
+            }),
+          );
+        }),
+      ),
     );
   };
 
   yield* projectionPipeline.bootstrap;
-
-  // bootstrap in-memory read model from event store
-  yield* Stream.runForEach(eventStore.readAll(), (event) =>
-    Effect.gen(function* () {
-      readModel = yield* projectEvent(readModel, event);
-    }),
-  );
+  readModel = yield* projectionSnapshotQuery.getSnapshot();
 
   const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
   yield* Effect.forkScoped(worker);

@@ -1,4 +1,5 @@
 import { memo, useState, useCallback } from "react";
+import { useAppSettings } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -63,9 +64,11 @@ const PlanSidebar = memo(function PlanSidebar({
   workspaceRoot,
   onClose,
 }: PlanSidebarProps) {
+  const { settings } = useAppSettings();
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const [copied, setCopied] = useState(false);
+  const chatMarkdownVariant = settings.enableOpencodeChatColors ? "opencode" : "default";
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -239,6 +242,7 @@ const PlanSidebar = memo(function PlanSidebar({
                     text={displayedPlanMarkdown ?? ""}
                     cwd={markdownCwd}
                     isStreaming={false}
+                    variant={chatMarkdownVariant}
                   />
                 </div>
               ) : null}

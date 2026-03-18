@@ -42,6 +42,12 @@ export const DeleteProjectionThreadMessagesInput = Schema.Struct({
 });
 export type DeleteProjectionThreadMessagesInput = typeof DeleteProjectionThreadMessagesInput.Type;
 
+export const ReplaceProjectionThreadMessagesInput = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(ProjectionThreadMessage),
+});
+export type ReplaceProjectionThreadMessagesInput = typeof ReplaceProjectionThreadMessagesInput.Type;
+
 /**
  * ProjectionThreadMessageRepositoryShape - Service API for projected thread messages.
  */
@@ -69,6 +75,13 @@ export interface ProjectionThreadMessageRepositoryShape {
    */
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadMessagesInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Replace all projected thread messages for a thread with a fresh snapshot.
+   */
+  readonly replaceByThreadId: (
+    input: ReplaceProjectionThreadMessagesInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

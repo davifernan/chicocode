@@ -2,6 +2,7 @@ import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@t
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveCompletedTurnSummaryByAssistantMessageId,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   PROVIDER_OPTIONS,
@@ -546,6 +547,7 @@ describe("hasToolActivityForTurn", () => {
 describe("isLatestTurnSettled", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    requestedAt: "2026-02-27T21:09:58.000Z",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
@@ -559,13 +561,13 @@ describe("isLatestTurnSettled", () => {
     ).toBe(false);
   });
 
-  it("returns false while any turn is running to avoid stale latest-turn banners", () => {
+  it("returns true once a different turn is active in the running session", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-2"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true once the session is no longer running that turn", () => {
@@ -582,6 +584,7 @@ describe("isLatestTurnSettled", () => {
       isLatestTurnSettled(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
           startedAt: null,
           completedAt: "2026-02-27T21:10:06.000Z",
         },
@@ -594,6 +597,7 @@ describe("isLatestTurnSettled", () => {
 describe("deriveActiveWorkStartedAt", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    requestedAt: "2026-02-27T21:09:58.000Z",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
@@ -629,6 +633,7 @@ describe("deriveActiveWorkStartedAt", () => {
       deriveActiveWorkStartedAt(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
           startedAt: "2026-02-27T21:10:00.000Z",
           completedAt: "2026-02-27T21:10:06.000Z",
         },
@@ -636,6 +641,153 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
+  });
+
+  it("uses sendStartedAt when a newer turn is active but latestTurn is still the prior run", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        latestTurn,
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-2"),
+        },
+        "2026-02-27T21:11:00.000Z",
+      ),
+    ).toBe("2026-02-27T21:11:00.000Z");
+  });
+
+  it("uses requestedAt while the active turn is still waiting to start", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+        "2026-02-27T21:11:00.000Z",
+      ),
+    ).toBe("2026-02-27T21:09:58.000Z");
+  });
+});
+
+describe("deriveCompletedTurnSummaryByAssistantMessageId", () => {
+  it("keeps completed run summaries keyed to each assistant message", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-start",
+        kind: "turn.started",
+        tone: "info",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:00.000Z",
+      }),
+      makeActivity({
+        id: "turn-1-tool",
+        kind: "tool.completed",
+        tone: "tool",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:04.000Z",
+      }),
+      makeActivity({
+        id: "turn-1-complete",
+        kind: "turn.completed",
+        tone: "info",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:12.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-start",
+        kind: "turn.started",
+        tone: "info",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:00.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-tool",
+        kind: "tool.completed",
+        tone: "tool",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:03.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-complete",
+        kind: "turn.completed",
+        tone: "info",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:08.000Z",
+      }),
+    ];
+
+    const result = deriveCompletedTurnSummaryByAssistantMessageId(
+      activities,
+      [
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          completedAt: "2026-02-27T21:10:12.000Z",
+          files: [{ path: "apps/web/src/session-logic.ts" }],
+          assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+        },
+        {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          completedAt: "2026-02-27T21:11:08.000Z",
+          files: [{ path: "apps/web/src/components/ChatView.tsx" }],
+          assistantMessageId: MessageId.makeUnsafe("assistant-2"),
+        },
+      ],
+      {
+        turnId: TurnId.makeUnsafe("turn-2"),
+        requestedAt: "2026-02-27T21:10:58.000Z",
+        startedAt: "2026-02-27T21:11:00.000Z",
+        completedAt: "2026-02-27T21:11:08.000Z",
+        assistantMessageId: MessageId.makeUnsafe("assistant-2"),
+      },
+      {
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.makeUnsafe("turn-3"),
+      },
+    );
+
+    expect(Array.from(result.entries())).toEqual([
+      ["assistant-1", "Worked for 12s"],
+      ["assistant-2", "Worked for 8.0s"],
+    ]);
+  });
+
+  it("skips turns without tool activity or valid timing", () => {
+    const result = deriveCompletedTurnSummaryByAssistantMessageId(
+      [
+        makeActivity({
+          id: "turn-1-start",
+          kind: "turn.started",
+          tone: "info",
+          turnId: "turn-1",
+          createdAt: "2026-02-27T21:10:00.000Z",
+        }),
+        makeActivity({
+          id: "turn-1-complete",
+          kind: "turn.completed",
+          tone: "info",
+          turnId: "turn-1",
+          createdAt: "2026-02-27T21:10:05.000Z",
+        }),
+      ],
+      [
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          completedAt: "2026-02-27T21:10:05.000Z",
+          files: [],
+          assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+        },
+      ],
+      null,
+      null,
+    );
+
+    expect(result.size).toBe(0);
   });
 });
 
@@ -645,6 +797,7 @@ describe("PROVIDER_OPTIONS", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
+      { value: "opencode", label: "OpenCode", available: true },
       { value: "claudeCode", label: "Claude Code", available: false },
       { value: "cursor", label: "Cursor", available: false },
     ]);

@@ -6,7 +6,12 @@
  *
  * @module ProjectionSnapshotQuery
  */
-import type { OrchestrationReadModel } from "@t3tools/contracts";
+import type {
+  OrchestrationGetThreadMessagesInput,
+  OrchestrationReadModel,
+  OrchestrationSummaryReadModel,
+  OrchestrationThreadMessagesResult,
+} from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -23,6 +28,24 @@ export interface ProjectionSnapshotQueryShape {
    * projector cursor state.
    */
   readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, ProjectionRepositoryError>;
+
+  /**
+   * Read the latest lightweight orchestration projection snapshot.
+   *
+   * Omits full message history so the UI can hydrate sidebar/project state
+   * without transferring every historical chat message.
+   */
+  readonly getSummarySnapshot: () => Effect.Effect<
+    OrchestrationSummaryReadModel,
+    ProjectionRepositoryError
+  >;
+
+  /**
+   * Read the full message history for a single thread.
+   */
+  readonly getThreadMessages: (
+    input: OrchestrationGetThreadMessagesInput,
+  ) => Effect.Effect<OrchestrationThreadMessagesResult, ProjectionRepositoryError>;
 }
 
 /**

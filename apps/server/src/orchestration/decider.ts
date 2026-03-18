@@ -159,6 +159,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           model: command.model,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
+          provider: command.provider ?? "codex",
+          source: command.source ?? "native",
+          externalSessionId: command.externalSessionId ?? null,
+          externalThreadId: command.externalThreadId ?? null,
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -210,6 +214,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.model !== undefined ? { model: command.model } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.providerMetadata !== undefined
+            ? { providerMetadata: command.providerMetadata }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -506,6 +513,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.message.import": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: command.role,
+          text: command.text,
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.messages.import-snapshot": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.messages-imported",
+        payload: {
+          threadId: command.threadId,
+          messages: command.messages,
+          ...(command.providerMetadata !== undefined
+            ? { providerMetadata: command.providerMetadata }
+            : {}),
           updatedAt: command.createdAt,
         },
       };

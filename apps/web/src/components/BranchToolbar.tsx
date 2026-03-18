@@ -1,4 +1,4 @@
-import type { ThreadId } from "@t3tools/contracts";
+import type { ProviderKind, ThreadId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
 import { newCommandId } from "../lib/utils";
@@ -15,6 +15,7 @@ import { Button } from "./ui/button";
 
 interface BranchToolbarProps {
   threadId: ThreadId;
+  provider: ProviderKind;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
@@ -23,6 +24,7 @@ interface BranchToolbarProps {
 
 export default function BranchToolbar({
   threadId,
+  provider,
   onEnvModeChange,
   envLocked,
   onCheckoutPullRequestRequest,
@@ -103,8 +105,11 @@ export default function BranchToolbar({
   if (!activeThreadId || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 pb-3 pt-1">
+    <div className="mx-auto flex w-full max-w-[var(--chat-content-max-width)] items-center justify-between px-5 pb-3 pt-1">
       <div className="flex items-center gap-2">
+        <span className="rounded-[4px] border border-border/50 bg-background/70 px-1 py-0.5 font-medium text-[8px] leading-none tracking-[0.12em] text-muted-foreground/60 uppercase">
+          {provider === "opencode" ? "OpenCode" : "Codex"}
+        </span>
         {envLocked || activeWorktreePath ? (
           <span className="border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
             {activeWorktreePath ? "Worktree" : "Local"}

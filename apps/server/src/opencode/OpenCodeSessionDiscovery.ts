@@ -54,6 +54,30 @@ export class OpenCodeSessionDiscovery {
   }
 
   /**
+   * Discover unique project directories that have sessions stored under the
+   * global OpenCode project (worktree `/`).
+   *
+   * Older versions of OpenCode stored all sessions under the global project
+   * instead of registering per-worktree project entries. This method retrieves
+   * sessions from that global context and returns the distinct `directory`
+   * values so they can be treated as first-class projects during sync.
+   *
+   * @param limit - Max sessions to fetch when scanning. Defaults to 5000.
+   * @returns Unique non-root directory paths found in global-project sessions.
+   */
+  async discoverOrphanedDirectories(limit = 5_000): Promise<string[]> {
+    const sessions = await this.client.listSessions("/", { limit });
+    const seen = new Set<string>();
+    for (const s of sessions) {
+      const dir = s.directory;
+      if (dir && dir !== "/" && !seen.has(dir)) {
+        seen.add(dir);
+      }
+    }
+    return [...seen];
+  }
+
+  /**
    * Fetch the full message history for a single session.
    *
    * @param sessionId - OpenCode session identifier.

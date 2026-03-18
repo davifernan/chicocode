@@ -1,15 +1,35 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activatePendingUserInputCustomAnswer,
   buildPendingUserInputAnswers,
   countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
   findFirstUnansweredPendingUserInputQuestionIndex,
   resolvePendingUserInputAnswer,
+  selectPendingUserInputOption,
   setPendingUserInputCustomAnswer,
 } from "./pendingUserInput";
 
 describe("resolvePendingUserInputAnswer", () => {
+  it("builds an option draft with an empty custom answer", () => {
+    expect(selectPendingUserInputOption("Scaffold only")).toEqual({
+      selectedOptionLabel: "Scaffold only",
+      customAnswer: "",
+    });
+  });
+
+  it("activates custom-answer mode without resolving an answer yet", () => {
+    expect(
+      activatePendingUserInputCustomAnswer({
+        selectedOptionLabel: "Keep current envelope",
+      }),
+    ).toEqual({
+      customAnswer: "",
+      prefersCustomAnswer: true,
+    });
+  });
+
   it("prefers a custom answer over a selected option", () => {
     expect(
       resolvePendingUserInputAnswer({
@@ -38,6 +58,7 @@ describe("resolvePendingUserInputAnswer", () => {
     ).toEqual({
       selectedOptionLabel: undefined,
       customAnswer: "doesn't matter",
+      prefersCustomAnswer: true,
     });
   });
 });
@@ -187,6 +208,27 @@ describe("pending user input question progress", () => {
       isLastQuestion: false,
       isComplete: false,
       canAdvance: true,
+    });
+  });
+
+  it("tracks explicit custom-answer mode before text is entered", () => {
+    expect(
+      derivePendingUserInputProgress(
+        questions,
+        {
+          scope: {
+            customAnswer: "",
+            prefersCustomAnswer: true,
+          },
+        },
+        0,
+      ),
+    ).toMatchObject({
+      selectedOptionLabel: undefined,
+      customAnswer: "",
+      usingCustomAnswer: true,
+      resolvedAnswer: null,
+      canAdvance: false,
     });
   });
 });

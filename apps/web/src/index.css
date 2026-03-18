@@ -41,6 +41,28 @@
       background-position: -200% 0;
     }
   }
+  --animate-jump-to-latest-in: jump-to-latest-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.05) forwards;
+  --animate-jump-to-latest-out: jump-to-latest-out 0.25s cubic-bezier(0.4, 0, 1, 1) forwards;
+  @keyframes jump-to-latest-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes jump-to-latest-out {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(8px) scale(0.92);
+    }
+  }
 }
 
 @layer base {
@@ -64,6 +86,8 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  --chat-content-max-width: 52rem;
+  --settings-content-max-width: 56rem;
   --background: var(--color-white);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -117,6 +141,28 @@
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
+  }
+}
+
+@media (min-width: 1680px) {
+  :root {
+    --chat-content-max-width: 60rem;
+    --settings-content-max-width: 68rem;
+  }
+
+  html {
+    font-size: clamp(17px, calc(17px + (100vw - 1680px) * 0.0022727), 19px);
+  }
+}
+
+@media (min-width: 2240px) {
+  :root {
+    --chat-content-max-width: 66rem;
+    --settings-content-max-width: 74rem;
+  }
+
+  html {
+    font-size: 19px;
   }
 }
 
@@ -244,6 +290,25 @@ label:has(> select#reasoning-effort) select {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+  --chat-markdown-heading: var(--foreground);
+  --chat-markdown-link: var(--info-foreground);
+  --chat-markdown-strong: var(--foreground);
+  --chat-markdown-emphasis: var(--foreground);
+  --chat-markdown-inline-code: var(--foreground);
+  --chat-markdown-blockquote: var(--muted-foreground);
+}
+
+.chat-markdown--opencode {
+  --chat-markdown-heading: color-mix(in srgb, var(--primary) 72%, var(--foreground));
+  --chat-markdown-link: color-mix(in srgb, var(--primary) 56%, var(--info-foreground));
+  --chat-markdown-strong: color-mix(in srgb, var(--primary) 16%, var(--foreground));
+  --chat-markdown-emphasis: color-mix(in srgb, var(--primary) 36%, var(--foreground));
+  --chat-markdown-inline-code: color-mix(in srgb, var(--success-foreground) 74%, var(--foreground));
+  --chat-markdown-blockquote: color-mix(
+    in srgb,
+    var(--warning-foreground) 48%,
+    var(--muted-foreground)
+  );
 }
 
 .chat-markdown > :first-child {
@@ -261,6 +326,19 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown pre,
 .chat-markdown table {
   margin: 0.65rem 0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 1.15rem 0 0.45rem;
+  color: var(--chat-markdown-heading);
+  font-size: inherit;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .chat-markdown ul {
@@ -293,20 +371,34 @@ label:has(> select#reasoning-effort) select {
   margin-top: 0.25rem;
 }
 
+.chat-markdown li::marker {
+  color: color-mix(in srgb, var(--chat-markdown-blockquote) 70%, var(--muted-foreground));
+}
+
 .chat-markdown a {
-  color: var(--info-foreground);
+  color: var(--chat-markdown-link);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--info-foreground) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--chat-markdown-link) 40%, transparent);
 }
 
 .chat-markdown a:hover {
   opacity: 0.8;
 }
 
+.chat-markdown strong,
+.chat-markdown b {
+  color: var(--chat-markdown-strong);
+}
+
+.chat-markdown em,
+.chat-markdown i {
+  color: var(--chat-markdown-emphasis);
+}
+
 .chat-markdown blockquote {
-  border-left: 2px solid var(--border);
+  border-left: 2px solid color-mix(in srgb, var(--chat-markdown-blockquote) 35%, var(--border));
   padding-left: 0.8rem;
-  color: var(--muted-foreground);
+  color: var(--chat-markdown-blockquote);
 }
 
 .chat-markdown :not(pre) > code {
@@ -314,7 +406,7 @@ label:has(> select#reasoning-effort) select {
   border-radius: 0.375rem;
   background: var(--muted);
   padding: 0.1rem 0.35rem;
-  color: var(--foreground);
+  color: var(--chat-markdown-inline-code);
   font-size: 0.75rem;
 }
 

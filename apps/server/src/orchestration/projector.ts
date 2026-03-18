@@ -18,6 +18,7 @@ import {
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
+  ThreadMessagesImportedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadRevertedPayload,
@@ -255,6 +256,10 @@ export function projectEvent(
             model: payload.model,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            provider: payload.provider,
+            source: payload.source,
+            externalSessionId: payload.externalSessionId,
+            externalThreadId: payload.externalThreadId,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
@@ -298,6 +303,9 @@ export function projectEvent(
             ...(payload.model !== undefined ? { model: payload.model } : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.providerMetadata !== undefined
+              ? { providerMetadata: payload.providerMetadata }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -387,6 +395,51 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
             updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.messages-imported":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadMessagesImportedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        const messages: OrchestrationMessage[] = [];
+        for (const entry of payload.messages) {
+          messages.push(
+            yield* decodeForEvent(
+              OrchestrationMessage,
+              {
+                id: entry.messageId,
+                role: entry.role,
+                text: entry.text,
+                turnId: null,
+                streaming: false,
+                createdAt: entry.createdAt,
+                updatedAt: entry.createdAt,
+              },
+              event.type,
+              "message",
+            ),
+          );
+        }
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            messages: messages.slice(-MAX_THREAD_MESSAGES),
+            ...(payload.providerMetadata !== undefined
+              ? { providerMetadata: payload.providerMetadata ?? undefined }
+              : {}),
+            updatedAt: payload.updatedAt,
           }),
         };
       });

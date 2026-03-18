@@ -10,6 +10,8 @@ import { ServerConfig } from "./config";
 import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
+import { ProviderThreadCatalogRepositoryLive } from "./persistence/Layers/ProviderThreadCatalog";
+import { UiStateRepositoryLive } from "./persistence/Layers/UiState";
 import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
@@ -76,6 +78,7 @@ export function makeServerRuntimeServicesLayer() {
   const textGenerationLayer = CodexTextGenerationLive;
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
@@ -129,6 +132,8 @@ export function makeServerRuntimeServicesLayer() {
     gitCoreLayer,
     gitManagerLayer,
     terminalLayer,
+    ProviderThreadCatalogRepositoryLive,
+    UiStateRepositoryLive,
     KeybindingsLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

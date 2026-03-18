@@ -52,8 +52,15 @@ const CodexProviderStartOptions = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 
+const OpenCodeProviderStartOptions = Schema.Struct({
+  serverUrl: Schema.optional(TrimmedNonEmptyStringSchema),
+  serverPassword: Schema.optional(TrimmedNonEmptyStringSchema),
+  binaryPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
+  opencode: Schema.optional(OpenCodeProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

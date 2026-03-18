@@ -76,6 +76,9 @@ interface PersistedComposerThreadDraftState {
   attachments: PersistedComposerImageAttachment[];
   provider?: ProviderKind | null;
   model?: string | null;
+  opencodeAgent?: string | null;
+  opencodeVariant?: string | null;
+  opencodeAllowQuestions?: boolean | null;
   runtimeMode?: RuntimeMode | null;
   interactionMode?: ProviderInteractionMode | null;
   effort?: CodexReasoningEffort | null;
@@ -106,6 +109,9 @@ interface ComposerThreadDraftState {
   persistedAttachments: PersistedComposerImageAttachment[];
   provider: ProviderKind | null;
   model: string | null;
+  opencodeAgent: string | null;
+  opencodeVariant: string | null;
+  opencodeAllowQuestions: boolean | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
   effort: CodexReasoningEffort | null;
@@ -162,6 +168,12 @@ interface ComposerDraftStoreState {
   setPrompt: (threadId: ThreadId, prompt: string) => void;
   setProvider: (threadId: ThreadId, provider: ProviderKind | null | undefined) => void;
   setModel: (threadId: ThreadId, model: string | null | undefined) => void;
+  setOpenCodeAgent: (threadId: ThreadId, agent: string | null | undefined) => void;
+  setOpenCodeVariant: (threadId: ThreadId, variant: string | null | undefined) => void;
+  setOpenCodeAllowQuestions: (
+    threadId: ThreadId,
+    allowQuestions: boolean | null | undefined,
+  ) => void;
   setRuntimeMode: (threadId: ThreadId, runtimeMode: RuntimeMode | null | undefined) => void;
   setInteractionMode: (
     threadId: ThreadId,
@@ -200,6 +212,9 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
   provider: null,
   model: null,
+  opencodeAgent: null,
+  opencodeVariant: null,
+  opencodeAllowQuestions: null,
   runtimeMode: null,
   interactionMode: null,
   effort: null,
@@ -218,6 +233,9 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     persistedAttachments: [],
     provider: null,
     model: null,
+    opencodeAgent: null,
+    opencodeVariant: null,
+    opencodeAllowQuestions: null,
     runtimeMode: null,
     interactionMode: null,
     effort: null,
@@ -238,6 +256,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.persistedAttachments.length === 0 &&
     draft.provider === null &&
     draft.model === null &&
+    draft.opencodeAgent === null &&
+    draft.opencodeVariant === null &&
+    draft.opencodeAllowQuestions === null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
     draft.effort === null &&
@@ -246,7 +267,19 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" ? value : null;
+  return value === "codex" || value === "opencode" ? value : null;
+}
+
+function normalizeOptionalDraftString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOptionalDraftBoolean(value: unknown): boolean | null {
+  return value === true || value === false ? value : null;
 }
 
 function revokeObjectPreviewUrl(previewUrl: string): void {
@@ -409,6 +442,11 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       typeof draftCandidate.model === "string"
         ? normalizeModelSlug(draftCandidate.model, provider ?? "codex")
         : null;
+    const opencodeAgent = normalizeOptionalDraftString(draftCandidate.opencodeAgent);
+    const opencodeVariant = normalizeOptionalDraftString(draftCandidate.opencodeVariant);
+    const opencodeAllowQuestions = normalizeOptionalDraftBoolean(
+      draftCandidate.opencodeAllowQuestions,
+    );
     const runtimeMode =
       draftCandidate.runtimeMode === "approval-required" ||
       draftCandidate.runtimeMode === "full-access"
@@ -432,6 +470,9 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       attachments.length === 0 &&
       !provider &&
       !model &&
+      !opencodeAgent &&
+      !opencodeVariant &&
+      opencodeAllowQuestions === null &&
       !runtimeMode &&
       !interactionMode &&
       !effort &&
@@ -444,6 +485,9 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
       attachments,
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
+      ...(opencodeAgent ? { opencodeAgent } : {}),
+      ...(opencodeVariant ? { opencodeVariant } : {}),
+      ...(opencodeAllowQuestions !== null ? { opencodeAllowQuestions } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
       ...(effort ? { effort } : {}),
@@ -550,6 +594,9 @@ function toHydratedThreadDraft(
     persistedAttachments: persistedDraft.attachments,
     provider: persistedDraft.provider ?? null,
     model: persistedDraft.model ?? null,
+    opencodeAgent: persistedDraft.opencodeAgent ?? null,
+    opencodeVariant: persistedDraft.opencodeVariant ?? null,
+    opencodeAllowQuestions: persistedDraft.opencodeAllowQuestions ?? null,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
     effort: persistedDraft.effort ?? null,
@@ -848,9 +895,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         if (threadId.length === 0) {
           return;
         }
-        const normalizedModel = normalizeModelSlug(model) ?? null;
         set((state) => {
           const existing = state.draftsByThreadId[threadId];
+          const normalizedModel = normalizeModelSlug(model, existing?.provider ?? "codex") ?? null;
           if (!existing && normalizedModel === null) {
             return state;
           }
@@ -861,6 +908,87 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextDraft: ComposerThreadDraftState = {
             ...base,
             model: normalizedModel,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setOpenCodeAgent: (threadId, agent) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextAgent = normalizeOptionalDraftString(agent);
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextAgent === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (base.opencodeAgent === nextAgent) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            opencodeAgent: nextAgent,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setOpenCodeVariant: (threadId, variant) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextVariant = normalizeOptionalDraftString(variant);
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextVariant === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (base.opencodeVariant === nextVariant) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            opencodeVariant: nextVariant,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setOpenCodeAllowQuestions: (threadId, allowQuestions) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        const nextAllowQuestions = normalizeOptionalDraftBoolean(allowQuestions);
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && nextAllowQuestions === null) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          if (base.opencodeAllowQuestions === nextAllowQuestions) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            opencodeAllowQuestions: nextAllowQuestions,
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -1220,6 +1348,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             draft.persistedAttachments.length === 0 &&
             draft.provider === null &&
             draft.model === null &&
+            draft.opencodeAgent === null &&
+            draft.opencodeVariant === null &&
+            draft.opencodeAllowQuestions === null &&
             draft.runtimeMode === null &&
             draft.interactionMode === null &&
             draft.effort === null &&
@@ -1236,6 +1367,15 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           if (draft.provider) {
             persistedDraft.provider = draft.provider;
+          }
+          if (draft.opencodeAgent) {
+            persistedDraft.opencodeAgent = draft.opencodeAgent;
+          }
+          if (draft.opencodeVariant) {
+            persistedDraft.opencodeVariant = draft.opencodeVariant;
+          }
+          if (draft.opencodeAllowQuestions !== null) {
+            persistedDraft.opencodeAllowQuestions = draft.opencodeAllowQuestions;
           }
           if (draft.runtimeMode) {
             persistedDraft.runtimeMode = draft.runtimeMode;

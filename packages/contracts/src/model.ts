@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["xhigh", "high", "medium", "low"] as const;
@@ -11,7 +12,9 @@ export const CodexModelOptions = Schema.Struct({
 export type CodexModelOptions = typeof CodexModelOptions.Type;
 
 export const OpenCodeModelOptions = Schema.Struct({
-  agent: Schema.optional(Schema.Literals(["build", "plan"])),
+  agent: Schema.optional(TrimmedNonEmptyString),
+  variant: Schema.optional(TrimmedNonEmptyString),
+  allowQuestions: Schema.optional(Schema.Boolean),
 });
 export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
 

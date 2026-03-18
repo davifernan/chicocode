@@ -13,6 +13,7 @@ import {
   ProviderKind,
   RuntimeMode,
   ThreadId,
+  ThreadProviderMetadata,
   ThreadSource,
   TurnId,
 } from "@t3tools/contracts";
@@ -34,6 +35,7 @@ export const ProjectionThread = Schema.Struct({
   externalThreadId: Schema.NullOr(Schema.String),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  providerMetadata: Schema.NullOr(ThreadProviderMetadata),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

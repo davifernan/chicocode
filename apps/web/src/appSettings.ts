@@ -3,15 +3,28 @@ import { Option, Schema } from "effect";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
+import { persistServerUiState } from "./serverUiState";
+
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+export const SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS = [1, 2, 3] as const;
+export type SidebarOpenProjectLimit = (typeof SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS)[number];
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
-  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  opencode: new Set(),
 };
 
 const AppSettingsSchema = Schema.Struct({
+  defaultProvider: Schema.Literals(["codex", "opencode"]).pipe(
+    Schema.withConstructorDefault(() => Option.some("codex")),
+  ),
+  defaultCodexModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
+    Schema.withConstructorDefault(() => Option.some(getDefaultModel("codex"))),
+  ),
+  defaultOpenCodeModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
@@ -27,6 +40,12 @@ const AppSettingsSchema = Schema.Struct({
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  enableOpencodeChatColors: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  sidebarOpenProjectLimit: Schema.Literals([1, 2, 3]).pipe(
+    Schema.withConstructorDefault(() => Option.some(1)),
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
@@ -78,10 +97,29 @@ export function normalizeCustomModelSlugs(
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const customCodexModels = normalizeCustomModelSlugs(settings.customCodexModels, "codex");
+  const customOpenCodeModels = normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode");
+  const normalizedDefaultOpenCodeModel = normalizeModelSlug(
+    settings.defaultOpenCodeModel,
+    "opencode",
+  );
   return {
     ...settings,
-    customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
-    customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    customCodexModels,
+    customOpenCodeModels,
+    defaultCodexModel: resolveAppModelSelection(
+      "codex",
+      customCodexModels,
+      settings.defaultCodexModel,
+    ),
+    defaultOpenCodeModel: resolveAppModelSelection(
+      "opencode",
+      customOpenCodeModels,
+      normalizedDefaultOpenCodeModel &&
+        customOpenCodeModels.includes(normalizedDefaultOpenCodeModel)
+        ? normalizedDefaultOpenCodeModel
+        : (customOpenCodeModels[0] ?? ""),
+    ),
   };
 }
 
@@ -90,11 +128,14 @@ export function getAppModelOptions(
   customModels: readonly string[],
   selectedModel?: string | null,
 ): AppModelOption[] {
-  const options: AppModelOption[] = getModelOptions(provider).map(({ slug, name }) => ({
-    slug,
-    name,
-    isCustom: false,
-  }));
+  const options: AppModelOption[] =
+    provider === "opencode"
+      ? []
+      : getModelOptions(provider).map(({ slug, name }) => ({
+          slug,
+          name,
+          isCustom: false,
+        }));
   const seen = new Set(options.map((option) => option.slug));
 
   for (const slug of normalizeCustomModelSlugs(customModels, provider)) {
@@ -111,7 +152,7 @@ export function getAppModelOptions(
   }
 
   const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
-  if (normalizedSelectedModel && !seen.has(normalizedSelectedModel)) {
+  if (provider !== "opencode" && normalizedSelectedModel && !seen.has(normalizedSelectedModel)) {
     options.push({
       slug: normalizedSelectedModel,
       name: normalizedSelectedModel,
@@ -144,6 +185,12 @@ export function resolveAppModelSelection(
   }
 
   const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
+  if (provider === "opencode") {
+    if (normalizedSelectedModel) {
+      return options.find((option) => option.slug === normalizedSelectedModel)?.slug ?? "";
+    }
+    return options[0]?.slug ?? "";
+  }
   if (!normalizedSelectedModel) {
     return getDefaultModel(provider);
   }
@@ -179,6 +226,34 @@ function emitChange(): void {
   }
 }
 
+function readLegacyAppSettingsValue(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeLegacyAppSettingsValue(value: string | null): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value === null) {
+      window.localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, value);
+  } catch {
+    // Best-effort persistence only.
+  }
+}
+
 function parsePersistedSettings(value: string | null): AppSettings {
   if (!value) {
     return DEFAULT_APP_SETTINGS;
@@ -196,7 +271,7 @@ export function getAppSettingsSnapshot(): AppSettings {
     return DEFAULT_APP_SETTINGS;
   }
 
-  const raw = window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+  const raw = readLegacyAppSettingsValue();
   if (raw === cachedRawSettings) {
     return cachedSnapshot;
   }
@@ -206,16 +281,28 @@ export function getAppSettingsSnapshot(): AppSettings {
   return cachedSnapshot;
 }
 
+export function readPersistedAppSettingsValue(): string | null {
+  return readLegacyAppSettingsValue();
+}
+
+export function hydrateAppSettingsFromSerialized(value: string | null): void {
+  if (value === cachedRawSettings) {
+    return;
+  }
+
+  writeLegacyAppSettingsValue(value);
+  cachedRawSettings = value;
+  cachedSnapshot = parsePersistedSettings(value);
+  emitChange();
+}
+
 function persistSettings(next: AppSettings): void {
   if (typeof window === "undefined") return;
 
   const raw = JSON.stringify(next);
-  try {
-    if (raw !== cachedRawSettings) {
-      window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, raw);
-    }
-  } catch {
-    // Best-effort persistence only.
+  if (raw !== cachedRawSettings) {
+    writeLegacyAppSettingsValue(raw);
+    persistServerUiState("appSettings", raw);
   }
 
   cachedRawSettings = raw;

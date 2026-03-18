@@ -6,6 +6,7 @@ import {
   OrchestrationEvent,
   ORCHESTRATION_WS_CHANNELS,
   OrchestrationGetFullThreadDiffInput,
+  OrchestrationGetThreadMessagesInput,
   ORCHESTRATION_WS_METHODS,
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
@@ -36,7 +37,11 @@ import {
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
-import { ServerConfigUpdatedPayload } from "./server";
+import {
+  ServerConfigUpdatedPayload,
+  ServerGetUiStateInput,
+  ServerUpsertUiStateInput,
+} from "./server";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -74,7 +79,9 @@ export const WS_METHODS = {
 
   // Server meta
   serverGetConfig: "server.getConfig",
+  serverGetUiState: "server.getUiState",
   serverUpsertKeybinding: "server.upsertKeybinding",
+  serverUpsertUiState: "server.upsertUiState",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -104,6 +111,7 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.getThreadMessages, OrchestrationGetThreadMessagesInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getTurnDiff, OrchestrationGetTurnDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getFullThreadDiff, OrchestrationGetFullThreadDiffInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.replayEvents, OrchestrationReplayEventsInput),
@@ -138,7 +146,9 @@ const WebSocketRequestBody = Schema.Union([
 
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetUiState, ServerGetUiStateInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+  tagRequestBody(WS_METHODS.serverUpsertUiState, ServerUpsertUiStateInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

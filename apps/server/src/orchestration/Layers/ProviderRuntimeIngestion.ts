@@ -6,6 +6,9 @@ import {
   type OrchestrationEvent,
   CheckpointRef,
   ThreadId,
+  type ThreadProviderMetadata,
+  type ThreadProviderMetadataTodo,
+  type ThreadProviderMetadataUsage,
   TurnId,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
@@ -97,12 +100,89 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function asNonNegativeInt(value: unknown): number | undefined {
+  const num = asNumber(value);
+  if (num === undefined) return undefined;
+  const normalized = Math.max(0, Math.trunc(num));
+  return Number.isFinite(normalized) ? normalized : undefined;
+}
+
 function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
   const payload = (event as { payload?: unknown }).payload;
   if (!payload || typeof payload !== "object") {
     return undefined;
   }
   return payload as Record<string, unknown>;
+}
+
+function normalizeThreadProviderMetadataUsage(
+  value: unknown,
+): ThreadProviderMetadataUsage | undefined {
+  const usage = asRecord(value);
+  if (!usage) return undefined;
+  const input = asNonNegativeInt(usage.input) ?? 0;
+  const output = asNonNegativeInt(usage.output) ?? 0;
+  const reasoning = asNonNegativeInt(usage.reasoning) ?? 0;
+  const cacheRead = asNonNegativeInt(usage.cacheRead) ?? 0;
+  const cacheWrite = asNonNegativeInt(usage.cacheWrite) ?? 0;
+  const total =
+    asNonNegativeInt(usage.total) ?? input + output + reasoning + cacheRead + cacheWrite;
+  const limit = asNonNegativeInt(usage.limit);
+  return {
+    input,
+    output,
+    reasoning,
+    cacheRead,
+    cacheWrite,
+    total,
+    ...(limit !== undefined ? { limit } : {}),
+  };
+}
+
+function normalizeThreadProviderMetadataTodos(
+  value: unknown,
+): ReadonlyArray<ThreadProviderMetadataTodo> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== undefined)
+    .map((entry) => ({
+      content: asString(entry.content) ?? "",
+      status: asString(entry.status) ?? "pending",
+      priority: asString(entry.priority) ?? "medium",
+    }))
+    .filter((entry) => entry.content.trim().length > 0);
+}
+
+function mergeThreadProviderMetadata(
+  current: ThreadProviderMetadata | null | undefined,
+  patch: Partial<ThreadProviderMetadata>,
+): ThreadProviderMetadata | undefined {
+  const next: {
+    agentName?: ThreadProviderMetadata["agentName"];
+    agentVariant?: ThreadProviderMetadata["agentVariant"];
+    providerId?: ThreadProviderMetadata["providerId"];
+    modelId?: ThreadProviderMetadata["modelId"];
+    latestUsage?: ThreadProviderMetadata["latestUsage"];
+    totalCostUsd?: ThreadProviderMetadata["totalCostUsd"];
+    todos?: ThreadProviderMetadata["todos"];
+  } = current ? { ...current } : {};
+  if (patch.agentName !== undefined) next.agentName = patch.agentName;
+  if (patch.agentVariant !== undefined) next.agentVariant = patch.agentVariant;
+  if (patch.providerId !== undefined) next.providerId = patch.providerId;
+  if (patch.modelId !== undefined) next.modelId = patch.modelId;
+  if (patch.latestUsage !== undefined) next.latestUsage = patch.latestUsage;
+  if (patch.totalCostUsd !== undefined) next.totalCostUsd = patch.totalCostUsd;
+  if (patch.todos !== undefined) next.todos = patch.todos;
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function normalizeRuntimeTurnState(
@@ -883,6 +963,23 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (event.type === "turn.completed" && event.provider === "opencode") {
+        const turnCostUsd = asNumber(event.payload.totalCostUsd);
+        if (turnCostUsd !== undefined) {
+          const providerMetadata = mergeThreadProviderMetadata(thread.providerMetadata, {
+            totalCostUsd: (thread.providerMetadata?.totalCostUsd ?? 0) + turnCostUsd,
+          });
+          if (providerMetadata) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.meta.update",
+              commandId: providerCommandId(event, "thread-provider-cost-update"),
+              threadId: thread.id,
+              providerMetadata,
+            });
+          }
+        }
+      }
+
       const assistantDelta =
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
@@ -1052,13 +1149,59 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "thread.metadata.updated" && event.payload.name) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.meta.update",
-          commandId: providerCommandId(event, "thread-meta-update"),
-          threadId: thread.id,
-          title: event.payload.name,
-        });
+      if (event.type === "thread.token-usage.updated") {
+        const usage = normalizeThreadProviderMetadataUsage(event.payload.usage);
+        if (usage) {
+          const providerMetadata = mergeThreadProviderMetadata(thread.providerMetadata, {
+            latestUsage: usage,
+          });
+          if (providerMetadata) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.meta.update",
+              commandId: providerCommandId(event, "thread-provider-usage-update"),
+              threadId: thread.id,
+              providerMetadata,
+            });
+          }
+        }
+      }
+
+      if (event.type === "thread.metadata.updated") {
+        const metadata = event.payload.metadata;
+        const providerMetadataPatch = metadata
+          ? {
+              ...(asString(metadata.agentName) ? { agentName: asString(metadata.agentName)! } : {}),
+              ...(asString(metadata.agentVariant)
+                ? { agentVariant: asString(metadata.agentVariant)! }
+                : {}),
+              ...(asString(metadata.providerId)
+                ? { providerId: asString(metadata.providerId)! }
+                : {}),
+              ...(asString(metadata.modelId) ? { modelId: asString(metadata.modelId)! } : {}),
+              ...(normalizeThreadProviderMetadataUsage(metadata.latestUsage)
+                ? { latestUsage: normalizeThreadProviderMetadataUsage(metadata.latestUsage)! }
+                : {}),
+              ...(asNumber(metadata.totalCostUsd) !== undefined
+                ? { totalCostUsd: asNumber(metadata.totalCostUsd)! }
+                : {}),
+              ...(metadata.todos !== undefined
+                ? { todos: normalizeThreadProviderMetadataTodos(metadata.todos) ?? [] }
+                : {}),
+            }
+          : undefined;
+        const providerMetadata = providerMetadataPatch
+          ? mergeThreadProviderMetadata(thread.providerMetadata, providerMetadataPatch)
+          : undefined;
+
+        if (event.payload.name || providerMetadata) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.meta.update",
+            commandId: providerCommandId(event, "thread-meta-update"),
+            threadId: thread.id,
+            ...(event.payload.name ? { title: event.payload.name } : {}),
+            ...(providerMetadata ? { providerMetadata } : {}),
+          });
+        }
       }
 
       if (event.type === "turn.diff.updated") {
@@ -1108,10 +1251,43 @@ const make = Effect.gen(function* () {
     });
 
   const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>
-    Ref.set(
-      assistantDeliveryModeRef,
-      event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
-    );
+    Effect.gen(function* () {
+      yield* Ref.set(
+        assistantDeliveryModeRef,
+        event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
+      );
+
+      const openCodeModelOptions = event.payload.modelOptions?.opencode;
+      if (!openCodeModelOptions) {
+        return;
+      }
+
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread || thread.provider !== "opencode") {
+        return;
+      }
+
+      const providerMetadata = mergeThreadProviderMetadata(thread.providerMetadata, {
+        ...(openCodeModelOptions.agent !== undefined
+          ? { agentName: openCodeModelOptions.agent }
+          : {}),
+        ...(openCodeModelOptions.variant !== undefined
+          ? { agentVariant: openCodeModelOptions.variant }
+          : {}),
+      });
+
+      if (!providerMetadata) {
+        return;
+      }
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`domain:${event.eventId}:thread-meta-update`),
+        threadId: event.payload.threadId,
+        providerMetadata,
+      });
+    });
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);

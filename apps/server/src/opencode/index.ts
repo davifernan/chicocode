@@ -20,10 +20,20 @@ export {
   type OpenCodeTextPart,
   type OpenCodeTokenData,
   type OpenCodeToolPart,
+  type OpenCodeProject,
+  type OpenCodeQuestionInfo,
+  type OpenCodeQuestionOption,
+  type OpenCodeQuestionRequest,
   type OpenCodeUnknownPart,
 } from "./OpenCodeClient.ts";
 
 export { OpenCodeProcessManager } from "./OpenCodeProcessManager.ts";
+
+export {
+  openCodeServerControl,
+  type OpenCodeServerCredentials,
+  type OpenCodeServerStatus,
+} from "./OpenCodeProcessManager.ts";
 
 export {
   OpenCodeSseClient,
@@ -54,5 +64,10 @@ export {
   type SyncResult,
   type SyncThreadCreateCommand,
 } from "./OpenCodeSessionSync.ts";
+
+export {
+  isTemporaryWorktree,
+  mergeOpenCodeProjectsByWorktree,
+} from "./OpenCodeProjectDiscovery.ts";
 
 export { canonicalizeWorkspacePath } from "./workspaceIdentity.ts";

@@ -159,10 +159,14 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getUiState: (input) => transport.request(WS_METHODS.serverGetUiState, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      upsertUiState: (input) => transport.request(WS_METHODS.serverUpsertUiState, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
+      getThreadMessages: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getThreadMessages, input),
       dispatchCommand: (command) =>
         transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command }),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),

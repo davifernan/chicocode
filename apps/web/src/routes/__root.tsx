@@ -11,12 +11,18 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { hydrateAppSettingsFromSerialized, readPersistedAppSettingsValue } from "../appSettings";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
-import { useStore } from "../store";
+import {
+  hydratePersistedRendererState,
+  markRendererPersistenceReady,
+  readPersistedRendererStateValue,
+  useStore,
+} from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
@@ -24,6 +30,7 @@ import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { hydrateServerUiState } from "../serverUiState";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -152,8 +159,23 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    const persistenceReady = Promise.all([
+      hydrateServerUiState({
+        key: "appSettings",
+        readLegacyValue: readPersistedAppSettingsValue,
+        onHydrate: hydrateAppSettingsFromSerialized,
+      }),
+      hydrateServerUiState({
+        key: "rendererState",
+        readLegacyValue: readPersistedRendererStateValue,
+        onHydrate: hydratePersistedRendererState,
+      }),
+    ]).finally(() => {
+      markRendererPersistenceReady();
+    });
 
     const flushSnapshotSync = async (): Promise<void> => {
+      await persistenceReady;
       const snapshot = await api.orchestration.getSnapshot();
       if (disposed) return;
       latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
@@ -231,6 +253,10 @@ function EventRouter() {
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
+        // Reset the sequence baseline on every welcome (initial connect or reconnect)
+        // so that domain events from a freshly (re)started server are never dropped
+        // by the event.sequence <= latestSequence guard.
+        latestSequence = 0;
         await syncSnapshot();
         if (disposed) {
           return;

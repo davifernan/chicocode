@@ -264,6 +264,7 @@ const make = Effect.gen(function* () {
       const providerChanged =
         options?.provider !== undefined && options.provider !== currentProvider;
       const activeSession = yield* resolveActiveSession(existingSessionThreadId);
+      const missingActiveSession = activeSession === undefined;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -271,12 +272,17 @@ const make = Effect.gen(function* () {
       const modelChanged = options?.model !== undefined && options.model !== activeSession?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
 
-      if (!runtimeModeChanged && !providerChanged && !shouldRestartForModelChange) {
+      if (
+        !missingActiveSession &&
+        !runtimeModeChanged &&
+        !providerChanged &&
+        !shouldRestartForModelChange
+      ) {
         return existingSessionThreadId;
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
+        missingActiveSession || providerChanged || shouldRestartForModelChange
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -288,6 +294,7 @@ const make = Effect.gen(function* () {
         desiredRuntimeMode: thread.runtimeMode,
         runtimeModeChanged,
         providerChanged,
+        missingActiveSession,
         modelChanged,
         shouldRestartForModelChange,
         hasResumeCursor: resumeCursor !== undefined,

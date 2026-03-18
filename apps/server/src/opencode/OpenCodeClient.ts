@@ -35,12 +35,21 @@ export interface OpenCodeMessageInfo {
   readonly sessionID: string;
   readonly role: "user" | "assistant" | "system";
   readonly agent?: string | undefined;
+  readonly providerID?: string | undefined;
+  readonly modelID?: string | undefined;
+  readonly variant?: string | undefined;
   readonly cost?: number | undefined;
   readonly tokens?: OpenCodeTokenData | undefined;
   readonly time?: {
     readonly created?: number | undefined;
     readonly completed?: number | undefined;
   };
+}
+
+export interface OpenCodeTodo {
+  readonly content: string;
+  readonly status: string;
+  readonly priority: string;
 }
 
 /** Token usage data attached to a message. */
@@ -101,10 +110,110 @@ export interface OpenCodeHealthResponse {
   readonly version?: string | undefined;
 }
 
+/** Project info as returned by GET /project. */
+export interface OpenCodeProject {
+  readonly id: string;
+  readonly worktree: string;
+  readonly vcs?: string | undefined;
+  readonly time?: {
+    readonly created?: number | undefined;
+    readonly updated?: number | undefined;
+  };
+}
+
+/** Model capabilities as returned by GET /provider. */
+export interface OpenCodeModelCapabilities {
+  readonly temperature: boolean;
+  readonly reasoning: boolean;
+  readonly attachment: boolean;
+  readonly toolcall: boolean;
+}
+
+/** Model cost info as returned by GET /provider. */
+export interface OpenCodeModelCost {
+  readonly input: number;
+  readonly output: number;
+  readonly cache?: { readonly read: number; readonly write: number } | undefined;
+}
+
+/** Model context limits as returned by GET /provider. */
+export interface OpenCodeModelLimit {
+  readonly context: number;
+  readonly input?: number | undefined;
+  readonly output: number;
+}
+
+/** A single model within a provider from GET /provider. */
+export interface OpenCodeProviderModel {
+  readonly id: string;
+  readonly providerID: string;
+  readonly name: string;
+  readonly family?: string | undefined;
+  readonly capabilities?: OpenCodeModelCapabilities | undefined;
+  readonly cost?: OpenCodeModelCost | undefined;
+  readonly limit?: OpenCodeModelLimit | undefined;
+  readonly status?: "alpha" | "beta" | "deprecated" | "active" | undefined;
+  readonly release_date?: string | undefined;
+  readonly variants?: Record<string, Record<string, unknown>> | undefined;
+}
+
+/** A provider entry from GET /provider. */
+export interface OpenCodeProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly models: Record<string, OpenCodeProviderModel>;
+}
+
+/** Response from GET /provider. */
+export interface OpenCodeProviderListResponse {
+  readonly all: readonly OpenCodeProvider[];
+  readonly default: Record<string, string>;
+  readonly connected: readonly string[];
+}
+
+export interface OpenCodeAgentInfo {
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly mode: "subagent" | "primary" | "all";
+  readonly hidden?: boolean | undefined;
+  readonly color?: string | undefined;
+  readonly variant?: string | undefined;
+  readonly model?:
+    | {
+        readonly providerID: string;
+        readonly modelID: string;
+      }
+    | undefined;
+}
+
+export interface OpenCodeModelRef {
+  readonly providerID: string;
+  readonly modelID: string;
+}
+
 /** Body for POST /session/:id/prompt_async. */
 export interface OpenCodePromptPart {
   readonly type: "text";
   readonly text: string;
+}
+
+export interface OpenCodeQuestionOption {
+  readonly label: string;
+  readonly description: string;
+}
+
+export interface OpenCodeQuestionInfo {
+  readonly question: string;
+  readonly header: string;
+  readonly options: ReadonlyArray<OpenCodeQuestionOption>;
+  readonly multiple?: boolean | undefined;
+  readonly custom?: boolean | undefined;
+}
+
+export interface OpenCodeQuestionRequest {
+  readonly id: string;
+  readonly sessionID: string;
+  readonly questions: ReadonlyArray<OpenCodeQuestionInfo>;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +300,76 @@ export class OpenCodeClient {
   }
 
   // -----------------------------------------------------------------------
+  // Provider endpoints
+  // -----------------------------------------------------------------------
+
+  /**
+   * List all available providers and their models.
+   *
+   * Returns providers with nested models, a map of default models per provider,
+   * and which providers are currently connected (have valid API keys).
+   *
+   * @param directory - Working directory path for instance scoping.
+   */
+  async listProviders(directory: string): Promise<OpenCodeProviderListResponse> {
+    return this.fetchJson<OpenCodeProviderListResponse>("GET", "/provider", directory);
+  }
+
+  /**
+   * List all OpenCode agents visible to the current instance.
+   *
+   * @param directory - Working directory path for instance scoping.
+   */
+  async listAgents(directory: string): Promise<OpenCodeAgentInfo[]> {
+    return this.fetchJson<OpenCodeAgentInfo[]>("GET", "/agent", directory);
+  }
+
+  async resolveModelRef(
+    directory: string,
+    selectedModel: string | null | undefined,
+  ): Promise<OpenCodeModelRef | undefined> {
+    const trimmed = selectedModel?.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    const providers = await this.listProviders(directory);
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex > 0) {
+      const providerID = trimmed.slice(0, slashIndex);
+      const modelID = trimmed.slice(slashIndex + 1);
+      const provider = providers.all.find((entry) => entry.id === providerID);
+      if (provider?.models[modelID]) {
+        return { providerID, modelID };
+      }
+    }
+
+    for (const provider of providers.all) {
+      if (provider.models[trimmed]) {
+        return {
+          providerID: provider.id,
+          modelID: trimmed,
+        };
+      }
+    }
+
+    return undefined;
+  }
+
+  // -----------------------------------------------------------------------
+  // Project endpoints
+  // -----------------------------------------------------------------------
+
+  /**
+   * List all projects known to the OpenCode server.
+   *
+   * @param directory - Any valid directory for instance scoping.
+   */
+  async listProjects(directory: string): Promise<OpenCodeProject[]> {
+    return this.fetchJson<OpenCodeProject[]>("GET", "/project", directory);
+  }
+
+  // -----------------------------------------------------------------------
   // Session endpoints
   // -----------------------------------------------------------------------
 
@@ -244,8 +423,16 @@ export class OpenCodeClient {
     return this.fetchJson<OpenCodeMessage[]>("GET", `/session/${sessionId}/message`, directory);
   }
 
+  async getTodos(sessionId: string, directory: string): Promise<ReadonlyArray<OpenCodeTodo>> {
+    return this.fetchJson<ReadonlyArray<OpenCodeTodo>>(
+      "GET",
+      `/session/${sessionId}/todo`,
+      directory,
+    );
+  }
+
   /**
-   * Send a prompt asynchronously (fire-and-forget).
+   * Send a prompt asynchronously with OpenCode-specific agent/model overrides.
    *
    * Use this to submit work without waiting for completion.
    * Monitor progress via SSE events instead.
@@ -253,10 +440,25 @@ export class OpenCodeClient {
    * @param sessionId - Session identifier.
    * @param message - Text prompt to send.
    * @param directory - Working directory path for instance scoping.
+   * @param options - Optional model / agent / variant overrides.
    */
-  async sendPromptAsync(sessionId: string, message: string, directory: string): Promise<void> {
+  async sendPromptAsync(
+    sessionId: string,
+    message: string,
+    directory: string,
+    options?: {
+      readonly agent?: string;
+      readonly model?: OpenCodeModelRef;
+      readonly tools?: Record<string, boolean>;
+      readonly variant?: string;
+    },
+  ): Promise<void> {
     const body = {
       parts: [{ type: "text" as const, text: message }],
+      ...(options?.agent ? { agent: options.agent } : {}),
+      ...(options?.model ? { model: options.model } : {}),
+      ...(options?.tools ? { tools: options.tools } : {}),
+      ...(options?.variant ? { variant: options.variant } : {}),
     };
     const resp = await this.fetch("POST", `/session/${sessionId}/prompt_async`, directory, body);
     if (!resp.ok) {
@@ -273,6 +475,26 @@ export class OpenCodeClient {
    */
   async abortSession(sessionId: string, directory: string): Promise<void> {
     const resp = await this.fetch("POST", `/session/${sessionId}/abort`, directory);
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new OpenCodeClientError(resp.status, detail);
+    }
+  }
+
+  async replyQuestion(
+    requestId: string,
+    answers: ReadonlyArray<ReadonlyArray<string>>,
+    directory?: string,
+  ): Promise<void> {
+    const resp = await this.fetch("POST", `/question/${requestId}/reply`, directory, { answers });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new OpenCodeClientError(resp.status, detail);
+    }
+  }
+
+  async rejectQuestion(requestId: string, directory?: string): Promise<void> {
+    const resp = await this.fetch("POST", `/question/${requestId}/reject`, directory);
     if (!resp.ok) {
       const detail = await resp.text().catch(() => "");
       throw new OpenCodeClientError(resp.status, detail);
