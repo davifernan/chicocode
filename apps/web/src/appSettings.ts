@@ -1,15 +1,22 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind } from "@t3tools/contracts";
+import { TrimmedNonEmptyString, type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { useLocalStorage } from "./hooks/useLocalStorage";
 
 import { persistServerUiState } from "./serverUiState";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+
 export const SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS = [1, 2, 3] as const;
 export type SidebarOpenProjectLimit = (typeof SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS)[number];
+
+export const TIMESTAMP_FORMAT_OPTIONS = ["locale", "12-hour", "24-hour"] as const;
+export type TimestampFormat = (typeof TIMESTAMP_FORMAT_OPTIONS)[number];
+export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
+
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   opencode: new Set(),
@@ -37,6 +44,9 @@ const AppSettingsSchema = Schema.Struct({
   opencodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
+  defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
+    Schema.withConstructorDefault(() => Option.some("local")),
+  ),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
@@ -47,12 +57,16 @@ const AppSettingsSchema = Schema.Struct({
   sidebarOpenProjectLimit: Schema.Literals([1, 2, 3]).pipe(
     Schema.withConstructorDefault(() => Option.some(1)),
   ),
+  timestampFormat: Schema.Literals(["locale", "12-hour", "24-hour"]).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {
@@ -62,10 +76,6 @@ export interface AppModelOption {
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
-
-let listeners: Array<() => void> = [];
-let cachedRawSettings: string | null | undefined;
-let cachedSnapshot: AppSettings = DEFAULT_APP_SETTINGS;
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -220,13 +230,7 @@ export function getSlashModelOptions(
   });
 }
 
-function emitChange(): void {
-  for (const listener of listeners) {
-    listener();
-  }
-}
-
-function readLegacyAppSettingsValue(): string | null {
+export function readPersistedAppSettingsValue(): string | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -238,7 +242,7 @@ function readLegacyAppSettingsValue(): string | null {
   }
 }
 
-function writeLegacyAppSettingsValue(value: string | null): void {
+export function hydrateAppSettingsFromSerialized(value: string | null): void {
   if (typeof window === "undefined") {
     return;
   }
@@ -246,107 +250,47 @@ function writeLegacyAppSettingsValue(value: string | null): void {
   try {
     if (value === null) {
       window.localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
-      return;
+    } else {
+      window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, value);
     }
-    window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, value);
   } catch {
     // Best-effort persistence only.
   }
-}
 
-function parsePersistedSettings(value: string | null): AppSettings {
-  if (!value) {
-    return DEFAULT_APP_SETTINGS;
-  }
-
-  try {
-    return normalizeAppSettings(Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(value));
-  } catch {
-    return DEFAULT_APP_SETTINGS;
-  }
-}
-
-export function getAppSettingsSnapshot(): AppSettings {
-  if (typeof window === "undefined") {
-    return DEFAULT_APP_SETTINGS;
-  }
-
-  const raw = readLegacyAppSettingsValue();
-  if (raw === cachedRawSettings) {
-    return cachedSnapshot;
-  }
-
-  cachedRawSettings = raw;
-  cachedSnapshot = parsePersistedSettings(raw);
-  return cachedSnapshot;
-}
-
-export function readPersistedAppSettingsValue(): string | null {
-  return readLegacyAppSettingsValue();
-}
-
-export function hydrateAppSettingsFromSerialized(value: string | null): void {
-  if (value === cachedRawSettings) {
-    return;
-  }
-
-  writeLegacyAppSettingsValue(value);
-  cachedRawSettings = value;
-  cachedSnapshot = parsePersistedSettings(value);
-  emitChange();
-}
-
-function persistSettings(next: AppSettings): void {
-  if (typeof window === "undefined") return;
-
-  const raw = JSON.stringify(next);
-  if (raw !== cachedRawSettings) {
-    writeLegacyAppSettingsValue(raw);
-    persistServerUiState("appSettings", raw);
-  }
-
-  cachedRawSettings = raw;
-  cachedSnapshot = next;
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.push(listener);
-
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === APP_SETTINGS_STORAGE_KEY) {
-      emitChange();
-    }
-  };
-
-  window.addEventListener("storage", onStorage);
-  return () => {
-    listeners = listeners.filter((entry) => entry !== listener);
-    window.removeEventListener("storage", onStorage);
-  };
+  window.dispatchEvent(
+    new CustomEvent("t3code:local_storage_change", {
+      detail: { key: APP_SETTINGS_STORAGE_KEY },
+    }),
+  );
 }
 
 export function useAppSettings() {
-  const settings = useSyncExternalStore(
-    subscribe,
-    getAppSettingsSnapshot,
-    () => DEFAULT_APP_SETTINGS,
+  const [settings, setSettings] = useLocalStorage(
+    APP_SETTINGS_STORAGE_KEY,
+    DEFAULT_APP_SETTINGS,
+    AppSettingsSchema,
   );
 
-  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    const next = normalizeAppSettings(
-      Schema.decodeSync(AppSettingsSchema)({
-        ...getAppSettingsSnapshot(),
-        ...patch,
-      }),
-    );
-    persistSettings(next);
-    emitChange();
-  }, []);
+  // Keep server UI state in sync whenever settings change.
+  useEffect(() => {
+    try {
+      const raw = JSON.stringify(settings);
+      persistServerUiState("appSettings", raw);
+    } catch {
+      // Best-effort only.
+    }
+  }, [settings]);
+
+  const updateSettings = useCallback(
+    (patch: Partial<AppSettings>) => {
+      setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+    },
+    [setSettings],
+  );
 
   const resetSettings = useCallback(() => {
-    persistSettings(DEFAULT_APP_SETTINGS);
-    emitChange();
-  }, []);
+    setSettings(DEFAULT_APP_SETTINGS);
+  }, [setSettings]);
 
   return {
     settings,

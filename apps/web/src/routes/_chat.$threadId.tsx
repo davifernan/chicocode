@@ -1,8 +1,15 @@
 import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
+import { Suspense, lazy, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import ChatView from "../components/ChatView";
+import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
+import {
+  DiffPanelHeaderSkeleton,
+  DiffPanelLoadingState,
+  DiffPanelShell,
+  type DiffPanelMode,
+} from "../components/DiffPanelShell";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -43,19 +50,21 @@ const DiffPanelSheet = (props: {
   );
 };
 
-const DiffLoadingFallback = (props: { inline: boolean }) => {
-  if (props.inline) {
-    return (
-      <div className="flex h-full min-h-0 items-center justify-center px-4 text-center text-xs text-muted-foreground/70">
-        Loading diff viewer...
-      </div>
-    );
-  }
-
+const DiffLoadingFallback = (props: { mode: DiffPanelMode }) => {
   return (
-    <aside className="flex h-full w-[min(92vw,1040px)] shrink-0 items-center justify-center border-l border-border bg-card px-4 text-center text-xs text-muted-foreground/70">
-      Loading diff viewer...
-    </aside>
+    <DiffPanelShell mode={props.mode} header={<DiffPanelHeaderSkeleton />}>
+      <DiffPanelLoadingState label="Loading diff viewer..." />
+    </DiffPanelShell>
+  );
+};
+
+const LazyDiffPanel = (props: { mode: DiffPanelMode }) => {
+  return (
+    <DiffWorkerPoolProvider>
+      <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
+        <DiffPanel mode={props.mode} />
+      </Suspense>
+    </DiffWorkerPoolProvider>
   );
 };
 
@@ -63,8 +72,9 @@ const DiffPanelInlineSidebar = (props: {
   diffOpen: boolean;
   onCloseDiff: () => void;
   onOpenDiff: () => void;
+  renderDiffContent: boolean;
 }) => {
-  const { diffOpen, onCloseDiff, onOpenDiff } = props;
+  const { diffOpen, onCloseDiff, onOpenDiff, renderDiffContent } = props;
   const onOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -139,9 +149,7 @@ const DiffPanelInlineSidebar = (props: {
           storageKey: DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <Suspense fallback={<DiffLoadingFallback inline />}>
-          <DiffPanel mode="sidebar" />
-        </Suspense>
+        {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
         <SidebarRail />
       </Sidebar>
     </SidebarProvider>
@@ -162,13 +170,14 @@ function ChatThreadRouteView() {
   const routeThreadExists = threadExists || draftThreadExists;
   const diffOpen = search.diff === "1";
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
+  // TanStack Router keeps active route components mounted across param-only navigations
+  // unless remountDeps are configured, so this stays warm across thread switches.
+  const [hasOpenedDiff, setHasOpenedDiff] = useState(diffOpen);
   const closeDiff = useCallback(() => {
     void navigate({
       to: "/$threadId",
       params: { threadId },
-      search: (previous) => {
-        return stripDiffSearchParams(previous);
-      },
+      search: { diff: undefined },
     });
   }, [navigate, threadId]);
   const openDiff = useCallback(() => {
@@ -181,6 +190,12 @@ function ChatThreadRouteView() {
       },
     });
   }, [navigate, threadId]);
+
+  useEffect(() => {
+    if (diffOpen) {
+      setHasOpenedDiff(true);
+    }
+  }, [diffOpen]);
 
   useEffect(() => {
     if (!threadsHydrated) {
@@ -197,13 +212,20 @@ function ChatThreadRouteView() {
     return null;
   }
 
+  const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
+
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
           <ChatView key={threadId} threadId={threadId} />
         </SidebarInset>
-        <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
+        <DiffPanelInlineSidebar
+          diffOpen={diffOpen}
+          onCloseDiff={closeDiff}
+          onOpenDiff={openDiff}
+          renderDiffContent={shouldRenderDiffContent}
+        />
       </>
     );
   }
@@ -214,9 +236,7 @@ function ChatThreadRouteView() {
         <ChatView key={threadId} threadId={threadId} />
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
-        <Suspense fallback={<DiffLoadingFallback inline={false} />}>
-          <DiffPanel mode="sheet" />
-        </Suspense>
+        {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
       </DiffPanelSheet>
     </>
   );

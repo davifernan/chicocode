@@ -32,6 +32,7 @@ type ModelOption = {
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     { slug: "gpt-5.4", name: "GPT-5.4" },
+    { slug: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
     { slug: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark" },
     { slug: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
@@ -54,6 +55,8 @@ export const DEFAULT_MODEL_BY_PROVIDER = {
   codex: "gpt-5.4",
   opencode: "claude-sonnet-4-20250514",
 } as const satisfies Record<ProviderKind, ModelSlug>;
+
+export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini" as const;
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
   codex: {

@@ -1,4 +1,5 @@
 import type { ProviderKind, ThreadId } from "@t3tools/contracts";
+import { FolderIcon, GitForkIcon } from "lucide-react";
 import { useCallback } from "react";
 
 import { newCommandId } from "../lib/utils";
@@ -11,7 +12,12 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
-import { Button } from "./ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+
+const envModeItems = [
+  { value: "local", label: "Local" },
+  { value: "worktree", label: "New worktree" },
+] as const;
 
 interface BranchToolbarProps {
   threadId: ThreadId;
@@ -111,19 +117,48 @@ export default function BranchToolbar({
           {provider === "opencode" ? "OpenCode" : "Codex"}
         </span>
         {envLocked || activeWorktreePath ? (
-          <span className="border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
-            {activeWorktreePath ? "Worktree" : "Local"}
+          <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
+            {activeWorktreePath ? (
+              <>
+                <GitForkIcon className="size-3" />
+                Worktree
+              </>
+            ) : (
+              <>
+                <FolderIcon className="size-3" />
+                Local
+              </>
+            )}
           </span>
         ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="text-muted-foreground/70 hover:text-foreground/80"
-            size="xs"
-            onClick={() => onEnvModeChange(effectiveEnvMode === "local" ? "worktree" : "local")}
+          <Select
+            value={effectiveEnvMode}
+            onValueChange={(value) => onEnvModeChange(value as EnvMode)}
+            items={envModeItems}
           >
-            {effectiveEnvMode === "worktree" ? "New worktree" : "Local"}
-          </Button>
+            <SelectTrigger variant="ghost" size="xs" className="font-medium">
+              {effectiveEnvMode === "worktree" ? (
+                <GitForkIcon className="size-3" />
+              ) : (
+                <FolderIcon className="size-3" />
+              )}
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="local">
+                <span className="inline-flex items-center gap-1.5">
+                  <FolderIcon className="size-3" />
+                  Local
+                </span>
+              </SelectItem>
+              <SelectItem value="worktree">
+                <span className="inline-flex items-center gap-1.5">
+                  <GitForkIcon className="size-3" />
+                  New worktree
+                </span>
+              </SelectItem>
+            </SelectPopup>
+          </Select>
         )}
       </div>
 
