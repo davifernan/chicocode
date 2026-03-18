@@ -27,6 +27,7 @@ import {
 import { Switch } from "../components/ui/switch";
 import { APP_VERSION } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { serverApiUrl } from "~/lib/serverOrigin";
 
 const THEME_OPTIONS = [
   {
@@ -134,10 +135,13 @@ function buildOpenCodeSettingsPath(
   if (opts?.binaryPath) {
     params.set("binaryPath", opts.binaryPath);
   }
+  // Always use an absolute URL so the request reaches the T3 backend
+  // directly — required in Electron where the backend runs on a dynamic port.
+  const base = serverApiUrl(pathname);
   if (params.size === 0) {
-    return pathname;
+    return base;
   }
-  return `${pathname}?${params.toString()}`;
+  return `${base}?${params.toString()}`;
 }
 
 function getCustomModelsForProvider(
@@ -200,7 +204,7 @@ async function startOpenCodeServer(opts?: {
   binaryPath?: string;
 }): Promise<OpenCodeServerStatusResponse> {
   const hasBody = opts?.serverUrl || opts?.binaryPath;
-  const resp = await fetch("/api/opencode/server/start", {
+  const resp = await fetch(serverApiUrl("/api/opencode/server/start"), {
     method: "POST",
     signal: AbortSignal.timeout(90_000),
     ...(hasBody
@@ -221,7 +225,7 @@ async function startOpenCodeServer(opts?: {
 }
 
 async function stopOpenCodeServer(): Promise<OpenCodeServerStatusResponse> {
-  const resp = await fetch("/api/opencode/server/stop", {
+  const resp = await fetch(serverApiUrl("/api/opencode/server/stop"), {
     method: "POST",
     signal: AbortSignal.timeout(15_000),
   });

@@ -98,6 +98,7 @@ import {
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { getServerHttpOrigin, serverApiUrl } from "~/lib/serverOrigin";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -190,28 +191,6 @@ function T3Wordmark() {
       />
     </svg>
   );
-}
-
-/**
- * Derives the server's HTTP origin (scheme + host + port) from the same
- * sources WsTransport uses, converting ws(s) to http(s).
- */
-function getServerHttpOrigin(): string {
-  const bridgeUrl = window.desktopBridge?.getWsUrl();
-  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const wsUrl =
-    bridgeUrl && bridgeUrl.length > 0
-      ? bridgeUrl
-      : envUrl && envUrl.length > 0
-        ? envUrl
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
-  // Parse to extract just the origin, dropping path/query (e.g. ?token=…)
-  const httpUrl = wsUrl.replace(/^wss:/, "https:").replace(/^ws:/, "http:");
-  try {
-    return new URL(httpUrl).origin;
-  } catch {
-    return httpUrl;
-  }
 }
 
 const serverHttpOrigin = getServerHttpOrigin();
@@ -608,7 +587,7 @@ export default function Sidebar() {
     }
     setIsSyncingOpenCode(true);
     try {
-      const resp = await fetch("/api/opencode/sync-sessions", {
+      const resp = await fetch(serverApiUrl("/api/opencode/sync-sessions"), {
         method: "POST",
         signal: AbortSignal.timeout(30_000),
       });

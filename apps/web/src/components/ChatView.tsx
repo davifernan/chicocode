@@ -130,6 +130,7 @@ import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { resolveAppModelSelection, useAppSettings } from "../appSettings";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { serverApiUrl } from "~/lib/serverOrigin";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -232,10 +233,13 @@ function buildOpenCodeProxyPath(
   if (options?.binaryPath) {
     params.set("binaryPath", options.binaryPath);
   }
+  // Always use an absolute URL so the request reaches the T3 backend
+  // directly — required in Electron where the backend runs on a dynamic port.
+  const base = serverApiUrl(pathname);
   if (params.size === 0) {
-    return pathname;
+    return base;
   }
-  return `${pathname}?${params.toString()}`;
+  return `${base}?${params.toString()}`;
 }
 
 async function fetchOpenCodeComposerProviders(options?: {
@@ -828,10 +832,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
     const targetThreadId = activeOpenCodeThreadId;
     loadingExternalMessagesIdRef.current = targetThreadId;
-    fetch(`/api/opencode/threads/${encodeURIComponent(targetThreadId)}/load-messages`, {
-      method: "POST",
-      signal: AbortSignal.timeout(30_000),
-    })
+    fetch(
+      serverApiUrl(`/api/opencode/threads/${encodeURIComponent(targetThreadId)}/load-messages`),
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+      },
+    )
       .then((resp) => {
         if (!resp.ok) {
           console.warn("Failed to load OpenCode messages:", resp.status);

@@ -1,10 +1,18 @@
-## Executive summary
+## Executive summary (final, revised)
 
-- The strongest path for `T3 Code` is a `remote-authoritative control plane`, not full bidirectional local/remote state replication.
-- For MVP, the easiest and safest implementation is: remote `T3 Code` server runs on the cloud host, the desktop client bootstraps/connects over SSH and/or a tunneled local port, and all threads/sessions live remotely.
-- Your current codebase already has a useful seam for this: provider orchestration is mostly behind transport-neutral services, while the main hard local coupling sits in Codex process management.
-- `Send to Remote` should start as `thread export/import or handoff`, not live event replication.
-- Port forwarding for remote dev servers fits well as a second step after remote-authoritative sessions are working.
+**The sync problem disappears entirely if you go cloud-native from the start.**
+
+The entire "Send to Remote / push local chats" complexity was only necessary for a local-first architecture where sessions start locally. If the remote server is the authority from day one, there is nothing to sync. Sessions are already in the cloud. Closing your laptop does not end them. Opening a browser or phone shows the same state. No push, no cursor, no divergence detection needed.
+
+**Corrected architecture decision: cloud-native from session start, local mode is only an offline edge case.**
+
+Key implications:
+
+- Remote `T3 Code` server owns all new threads, sessions, and agent runs from the moment you connect.
+- Desktop client is a viewer/controller connected to the remote over SSH tunnel or direct WSS.
+- "Continue on another device" requires no special feature — the session is already there.
+- The event-sourced architecture (append-only `orchestration_events`) makes a future edge-case offline-export trivially implementable, but it is NOT on the main path.
+- The `"Continue in Cloud"` button concept only makes sense in a local-first design. In a cloud-native design, the button does not need to exist at all.
 
 ## Options considered
 
@@ -238,6 +246,64 @@ Sources:
 - Desktop can use SSH `LocalForward` for MVP.
 - Later, hosted browser/mobile access can move to authenticated reverse proxying.
 
+## Sync architecture: why historical chat sync is feasible
+
+T3 Code already uses **event sourcing** as its internal consistency model.
+The `orchestration_events` table in SQLite stores every domain event as an immutable, ordered, append-only log with the following fields:
+
+- `sequence` — global autoincrement, the sync cursor
+- `event_id` — UUID, globally unique per event
+- `aggregate_kind` / `stream_id` / `stream_version` — identifies the thread or project stream
+- `event_type` — describes what happened (thread.created, message.sent, turn.started, etc.)
+- `occurred_at` — ISO timestamp
+- `payload_json` — fully typed via `@t3tools/contracts` `OrchestrationEvent` schema
+- `command_id` / `causation_event_id` / `correlation_id` — causation chain
+
+Additionally, `OrchestrationEventStoreShape` already exposes:
+
+- `readAll()` — stream of all events from beginning
+- `readFromSequence(sequenceExclusive, limit)` — cursor-based streaming for incremental sync
+- `append(event)` — idempotent by `event_id` (UNIQUE constraint)
+
+This means:
+
+**Push-sync of historical chats from local to remote is a stream of `OrchestrationEvent` rows sent to the remote server's `append` endpoint with idempotency on `event_id`.**
+
+No custom conflict resolution is needed for static/completed chats:
+
+- Remote receives events for a thread it does not know yet → creates thread, replays events, projects read model
+- Remote receives an event it already has (`event_id` exists) → idempotent skip
+- Remote receives an event for a thread it knows (later local-only turn after initial sync) → appends at the correct stream version
+
+The only tricky case is **stream_version conflicts**: if the same thread was worked on both locally and remotely after the initial sync. This is the true split-brain case and should be handled by either:
+
+- Rejecting the push (forcing user to pick a winner), or
+- Forking the thread into a new `thread_id` on the remote
+
+This is the same problem as distributed git branch divergence and has the same clean answer: **no automatic merge of diverged agent sessions**.
+
+## Sync scope: what needs to move, what does not
+
+What needs to move for "my local chats are also on remote":
+
+| Data                     | Table                             | Sync approach                                      |
+| ------------------------ | --------------------------------- | -------------------------------------------------- |
+| Events (source of truth) | `orchestration_events`            | Push all events for selected threads               |
+| Projects                 | derived from events               | Rebuilt by projector from events                   |
+| Threads                  | derived from events               | Rebuilt by projector from events                   |
+| Messages                 | derived from events               | Rebuilt by projector from events                   |
+| Activities               | derived from events               | Rebuilt by projector from events                   |
+| Checkpoints              | `projection_turns.checkpoint_ref` | Git refs are local, NOT syncable without workspace |
+
+What does NOT need to move or cannot easily move:
+
+| Data                                         | Reason                                       |
+| -------------------------------------------- | -------------------------------------------- |
+| Provider runtime state (`resumeCursor`)      | Local process state, not meaningful remotely |
+| Live session state (active turns, approvals) | Cannot be safely migrated live               |
+| Git checkpoint refs                          | Bound to local file system and git repo      |
+| Attached images                              | Binary blobs, need separate upload flow      |
+
 ## Suggested implementation order
 
 ### Phase 1: Remote host mode for desktop
@@ -252,27 +318,52 @@ Why first:
 - Highest user value with lowest architectural risk.
 - Reuses current `wsTransport` model with minimal UI churn.
 
-### Phase 2: Remote provider abstraction
+### Phase 2: Historical thread push-sync (local → remote)
+
+This is the "Send to Remote" feature. Technically it means:
+
+1. New WS method: `sync.pushThread(threadId, targetRemoteUrl, authToken)` — or batch variant.
+2. Server reads all events for thread from local `OrchestrationEventStore.readAll()` filtered by `stream_id = threadId`.
+3. Server posts events to remote `sync.receiveEvents(events[])` endpoint.
+4. Remote server calls its local `OrchestrationEventStore.append()` per event — idempotent by `event_id`.
+5. Remote server re-runs `ProjectionPipeline` for the imported events — read models rebuild automatically.
+
+What you get for free from the existing architecture:
+
+- Idempotency: `event_id` UNIQUE constraint already prevents duplicates
+- Ordering: `stream_version` per aggregate ensures correct replay order
+- Typing: `OrchestrationEvent` schema from `@t3tools/contracts` is already serializable
+- Incremental sync: `readFromSequence(lastSyncedSequence)` is already there for future delta syncs
+
+What you need to add:
+
+- New WS methods for sync push/receive (small additions to `ws.ts` contracts)
+- A `SyncCursor` persistence table: `(deviceId, threadId, lastSyncedEventSequence, lastSyncedAt)` for future incremental syncs
+- Divergence detection: compare `stream_version` of last local event vs last remote event before push — reject if diverged
+
+### Phase 3: Remote provider abstraction
 
 - Introduce a `RemoteProviderAdapter` or remote-backed provider service boundary.
 - Move Codex/OpenCode lifecycle fully behind that boundary.
 - Extract business logic out of `apps/server/src/wsServer.ts`.
 
-### Phase 3: Remote command/terminal execution
+### Phase 4: Remote command/terminal execution
 
 - Add first-class remote command execution and terminal streaming.
 - Treat preview/dev server startup as remote commands tied to project/thread/workspace.
 
-### Phase 4: Preview URL / forwarded ports UX
+### Phase 5: Preview URL / forwarded ports UX
 
 - Add `open preview`, `forward port`, `stop forwarding`, `list forwarded ports`.
 - Start with SSH-based local forwarding for desktop.
 - Later add reverse-proxied web previews for browser/mobile.
 
-### Phase 5: Thread handoff and import/export
+### Phase 6: Continuous incremental sync (optional, later)
 
-- Support `Send to Remote` for non-live or completed local threads.
-- Prefer explicit import semantics over magical sync semantics.
+- After initial push-sync, delta sync on new local events to remote automatically.
+- Use `SyncCursor.lastSyncedEventSequence` as the `readFromSequence` cursor.
+- Background job runs sync on reconnect and on a heartbeat interval.
+- This enables the "continue on any device" scenario without requiring remote-only sessions.
 
 ## Concrete repo-level implications
 
