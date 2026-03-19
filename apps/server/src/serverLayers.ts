@@ -32,6 +32,7 @@ import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
 import { TerminalManagerLive } from "./terminal/Layers/Manager";
 import { KeybindingsLive } from "./keybindings";
 import { GitManagerLive } from "./git/Layers/GitManager";
+import { RemoteHostServiceLive } from "./remoteHost/Layers/RemoteHostService";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationLive } from "./git/Layers/CodexTextGeneration";
@@ -39,6 +40,8 @@ import { GitServiceLive } from "./git/Layers/GitService";
 import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
 import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { SyncCursorRepositoryLive } from "./persistence/Layers/SyncCursor";
+import { SyncServiceLive } from "./sync/SyncService";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
@@ -127,6 +130,11 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(textGenerationLayer),
   );
 
+  const syncLayer = SyncServiceLive.pipe(
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(SyncCursorRepositoryLive),
+  );
+
   return Layer.mergeAll(
     orchestrationReactorLayer,
     gitCoreLayer,
@@ -135,5 +143,8 @@ export function makeServerRuntimeServicesLayer() {
     ProviderThreadCatalogRepositoryLive,
     UiStateRepositoryLive,
     KeybindingsLive,
+    RemoteHostServiceLive,
+    SyncCursorRepositoryLive,
+    syncLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

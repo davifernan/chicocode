@@ -1,6 +1,8 @@
 import { Fragment, type ReactNode, createElement } from "react";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  type DevServerInfo,
+  type DevServerLogLinePayload,
   type ProviderKind,
   ThreadId,
   type OrchestrationSummaryReadModel,
@@ -26,6 +28,8 @@ export interface AppState {
   projects: Project[];
   threads: Thread[];
   threadsHydrated: boolean;
+  devServerByProjectId: Record<string, DevServerInfo>;
+  devServerLogsByProjectId: Record<string, string[]>;
 }
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
@@ -45,6 +49,8 @@ const initialState: AppState = {
   projects: [],
   threads: [],
   threadsHydrated: false,
+  devServerByProjectId: {},
+  devServerLogsByProjectId: {},
 };
 type PersistedRendererState = {
   expandedProjectCwds?: string[];
@@ -663,6 +669,37 @@ export function setThreadBranch(
 
 // ── Zustand store ────────────────────────────────────────────────────
 
+// ── Dev Server reducers ──────────────────────────────────────────────
+
+const DEV_SERVER_MAX_LOG_LINES = 500;
+
+function upsertDevServerStatus(state: AppState, info: DevServerInfo): AppState {
+  return {
+    ...state,
+    devServerByProjectId: {
+      ...state.devServerByProjectId,
+      [info.projectId]: info,
+    },
+  };
+}
+
+function appendDevServerLogLine(state: AppState, payload: DevServerLogLinePayload): AppState {
+  const existing = state.devServerLogsByProjectId[payload.projectId] ?? [];
+  const updated =
+    existing.length >= DEV_SERVER_MAX_LOG_LINES
+      ? [...existing.slice(existing.length - DEV_SERVER_MAX_LOG_LINES + 1), payload.line]
+      : [...existing, payload.line];
+  return {
+    ...state,
+    devServerLogsByProjectId: {
+      ...state.devServerLogsByProjectId,
+      [payload.projectId]: updated,
+    },
+  };
+}
+
+// ── Store interface ──────────────────────────────────────────────────
+
 interface AppStore extends AppState {
   syncServerReadModel: (readModel: OrchestrationSummaryReadModel) => void;
   hydrateThreadMessages: (result: OrchestrationThreadMessagesResult) => void;
@@ -678,6 +715,8 @@ interface AppStore extends AppState {
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
+  upsertDevServerStatus: (info: DevServerInfo) => void;
+  appendDevServerLogLine: (payload: DevServerLogLinePayload) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -697,6 +736,8 @@ export const useStore = create<AppStore>((set) => ({
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
+  upsertDevServerStatus: (info) => set((state) => upsertDevServerStatus(state, info)),
+  appendDevServerLogLine: (payload) => set((state) => appendDevServerLogLine(state, payload)),
 }));
 
 export function markRendererPersistenceReady(): void {

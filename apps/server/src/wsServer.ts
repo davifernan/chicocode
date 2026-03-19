@@ -7,6 +7,7 @@
  * @module Server
  */
 import http from "node:http";
+import os from "node:os";
 import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
@@ -27,10 +28,12 @@ import {
   type WsResponse as WsResponseMessage,
   WsResponse,
   type WsPushEnvelopeBase,
+  RemoteHostConfig,
 } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
   Cause,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -39,6 +42,7 @@ import {
   Path,
   Ref,
   Result,
+  Schedule,
   Schema,
   Scope,
   ServiceMap,
@@ -82,6 +86,10 @@ import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
 import { UiStateRepository } from "./persistence/Services/UiState.ts";
 import { ProviderThreadCatalogRepository } from "./persistence/Services/ProviderThreadCatalog.ts";
+import { RemoteHostService } from "./remoteHost/Services/RemoteHostService.ts";
+import { testConnection } from "./remoteHost/Services/ConnectionChecker.ts";
+import { SyncService } from "./sync/SyncService.ts";
+import { SyncCursorRepository } from "./persistence/Services/SyncCursor.ts";
 import {
   OpenCodeClient,
   type OpenCodeMessage,
@@ -90,6 +98,7 @@ import {
 import { buildOpenCodeThreadProviderMetadata } from "./opencode/providerMetadata.ts";
 import { openCodeServerControl } from "./opencode/OpenCodeProcessManager.ts";
 import { OpenCodeSessionDiscovery } from "./opencode/OpenCodeSessionDiscovery.ts";
+import { devServerManager } from "./devServer/DevServerManager.ts";
 import { OpenCodeSessionSync } from "./opencode/OpenCodeSessionSync.ts";
 import {
   isTemporaryWorktree,
@@ -242,7 +251,10 @@ export type ServerRuntimeServices =
   | UiStateRepository
   | Keybindings
   | Open
-  | AnalyticsService;
+  | AnalyticsService
+  | RemoteHostService
+  | SyncService
+  | SyncCursorRepository;
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",
@@ -284,6 +296,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const remoteHostService = yield* RemoteHostService;
+  const syncService = yield* SyncService;
 
   yield* keybindingsManager.syncDefaultKeybindingsOnStartup.pipe(
     Effect.catch((error) =>
@@ -1538,6 +1552,39 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
 
+  // Subscribe to remote host connection status and push to all WS clients
+  yield* Stream.runForEach(remoteHostService.subscribeToStatus(), (status) =>
+    pushBus.publishAll(WS_CHANNELS.serverRemoteConnectionStatus, status),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  // Push live OS metrics to all connected clients every 5 seconds.
+  // cpuPercent is approximated from the 1-minute load average divided by CPU
+  // count, so it can briefly exceed 100 under heavy load — we clamp it.
+  // On Windows os.loadavg() always returns [0,0,0], so cpuPercent is 0 there.
+  yield* Effect.gen(function* () {
+    const cpuList = os.cpus();
+    const loadAvg1 = os.loadavg()[0] ?? 0;
+    const cpuPercent =
+      cpuList.length > 0 ? Math.min(100, Math.round((loadAvg1 / cpuList.length) * 100)) : 0;
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const memPercent = totalMem > 0 ? Math.round((1 - freeMem / totalMem) * 100) : 0;
+    yield* pushBus.publishAll(WS_CHANNELS.serverMetrics, { cpuPercent, memPercent, loadAvg1 });
+  }).pipe(Effect.repeat(Schedule.fixed(Duration.seconds(5))), Effect.forkIn(subscriptionsScope));
+
+  // Restore remote host config from persistent state and reconnect if enabled
+  yield* Effect.gen(function* () {
+    const savedEntry = yield* uiStateRepository.getByKey({ key: "remoteHostConfig" });
+    if (savedEntry._tag === "Some") {
+      const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(RemoteHostConfig))(
+        savedEntry.value.valueJson,
+      );
+      if (decoded._tag === "Some" && decoded.value.enabled) {
+        yield* remoteHostService.applyConfig(decoded.value).pipe(Effect.forkIn(subscriptionsScope));
+      }
+    }
+  }).pipe(Effect.orElseSucceed(() => undefined));
+
   let welcomeBootstrapProjectId: ProjectId | undefined;
   let welcomeBootstrapThreadId: ThreadId | undefined;
 
@@ -1637,6 +1684,20 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   );
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeTerminalEvents()));
   yield* readiness.markTerminalSubscriptionsReady;
+
+  // Wire dev server manager events → push bus
+  const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) =>
+    void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerStatusChanged, info));
+  const onDevServerLogLine = (payload: import("@t3tools/contracts").DevServerLogLinePayload) =>
+    void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerLogLine, payload));
+  devServerManager.on("statusChanged", onDevServerStatusChanged);
+  devServerManager.on("logLine", onDevServerLogLine);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      devServerManager.off("statusChanged", onDevServerStatusChanged);
+      devServerManager.off("logLine", onDevServerLogLine);
+    }),
+  );
 
   yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
     Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
@@ -1836,6 +1897,35 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         };
       }
 
+      case WS_METHODS.devServerStart: {
+        const body = stripRequestTag(request.body);
+        const info = yield* Effect.tryPromise({
+          try: () => devServerManager.start(body.projectId, body.cwd),
+          catch: (cause) => new RouteRequestError({ message: String(cause) }),
+        });
+        return info;
+      }
+
+      case WS_METHODS.devServerStop: {
+        const body = stripRequestTag(request.body);
+        devServerManager.stop(body.projectId);
+        return;
+      }
+
+      case WS_METHODS.devServerGetStatus: {
+        const body = stripRequestTag(request.body);
+        return devServerManager.getStatus(body.projectId);
+      }
+
+      case WS_METHODS.devServerGetStatuses: {
+        return devServerManager.getAllStatuses();
+      }
+
+      case WS_METHODS.devServerGetLogs: {
+        const body = stripRequestTag(request.body);
+        return devServerManager.getLogs(body.projectId, body.limit);
+      }
+
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
@@ -1850,6 +1940,43 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           updatedAt: new Date().toISOString(),
         });
         return;
+      }
+
+      case WS_METHODS.serverSetRemoteHostConfig: {
+        const body = stripRequestTag(request.body);
+        // Persist config to server-side UI state (not localStorage — may contain key paths)
+        const valueJson =
+          body.config !== null
+            ? Schema.encodeSync(Schema.fromJsonString(RemoteHostConfig))(body.config)
+            : "null";
+        yield* uiStateRepository.upsert({
+          key: "remoteHostConfig",
+          valueJson,
+          updatedAt: new Date().toISOString(),
+        });
+        yield* remoteHostService.applyConfig(body.config).pipe(Effect.forkIn(subscriptionsScope));
+        return;
+      }
+
+      case WS_METHODS.serverTestRemoteConnection: {
+        const body = stripRequestTag(request.body);
+        return yield* testConnection(body.config, null);
+      }
+
+      case WS_METHODS.syncGetThreadManifest: {
+        const threads = yield* syncService.getThreadManifest();
+        return { threads };
+      }
+
+      case WS_METHODS.syncExportThreadEvents: {
+        const body = stripRequestTag(request.body);
+        const events = yield* syncService.exportThreadEvents(body.threadId);
+        return { events };
+      }
+
+      case WS_METHODS.syncReceiveEvents: {
+        const body = stripRequestTag(request.body);
+        return yield* syncService.receiveEvents(Array.from(body.events));
       }
 
       default: {

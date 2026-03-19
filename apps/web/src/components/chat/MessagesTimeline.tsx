@@ -38,10 +38,15 @@ import { clamp } from "effect/Number";
 import { estimateTimelineMessageHeight } from "../timelineHeight";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { SubagentCard } from "./SubagentCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
+import {
+  computeMessageDurationStart,
+  getDistinctWorkEntryPreview,
+  normalizeCompactToolLabel,
+} from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
@@ -165,6 +170,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         continue;
       }
 
+      if (timelineEntry.kind === "subagent") {
+        nextRows.push({
+          kind: "subagent",
+          id: timelineEntry.id,
+          createdAt: timelineEntry.createdAt,
+          subagent: timelineEntry.subagent,
+        });
+        continue;
+      }
+
       if (timelineEntry.kind === "proposed-plan") {
         nextRows.push({
           kind: "proposed-plan",
@@ -251,6 +266,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       const row = rows[index];
       if (!row) return 96;
       if (row.kind === "work") return 112;
+      if (row.kind === "subagent") {
+        const textLength =
+          (row.subagent.inputText?.length ?? 0) +
+          (row.subagent.outputText?.length ?? row.subagent.errorMessage?.length ?? 24);
+        const textHeight = Math.min(Math.max(Math.ceil(textLength / 84), 1) * 18, 180);
+        const internalsHeight =
+          (expandedWorkGroups[row.id] ?? false) ? row.subagent.internals.length * 34 : 0;
+        return 188 + textHeight + internalsHeight;
+      }
       if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
       if (row.kind === "working") return 40;
       return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
@@ -262,7 +286,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     if (timelineWidthPx === null) return;
     rowVirtualizer.measure();
-  }, [rowVirtualizer, timelineWidthPx]);
+  }, [expandedWorkGroups, rowVirtualizer, timelineWidthPx]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
@@ -534,6 +558,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "subagent" && (
+        <div className="min-w-0 px-1 py-0.5">
+          <SubagentCard
+            subagent={row.subagent}
+            expanded={expandedWorkGroups[row.id] ?? false}
+            nowIso={nowIso}
+            onToggleInternals={() => onToggleWorkGroup(row.id)}
+            renderInternalEntry={(entry) => (
+              <SimpleWorkEntryRow key={`subagent-internal:${entry.id}`} workEntry={entry} />
+            )}
+          />
+        </div>
+      )}
+
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
@@ -601,12 +639,19 @@ type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
 type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
 type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["proposedPlan"];
 type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
+type TimelineSubagent = Extract<TimelineEntry, { kind: "subagent" }>["subagent"];
 type TimelineRow =
   | {
       kind: "work";
       id: string;
       createdAt: string;
       groupedEntries: TimelineWorkEntry[];
+    }
+  | {
+      kind: "subagent";
+      id: string;
+      createdAt: string;
+      subagent: TimelineSubagent;
     }
   | {
       kind: "message";
@@ -860,7 +905,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
+  const preview = getDistinctWorkEntryPreview(heading, workEntryPreview(workEntry));
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;

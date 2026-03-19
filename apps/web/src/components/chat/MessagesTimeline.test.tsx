@@ -96,4 +96,117 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("lucide-terminal");
     expect(markup).toContain("yoo what&#x27;s ");
   });
+
+  it("renders a dedicated inline subagent card with nested internals", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "subagent:child-1",
+            kind: "subagent",
+            createdAt: "2026-03-18T12:00:00.000Z",
+            subagent: {
+              childSessionId: "child-1",
+              title: "Research helper",
+              status: "completed",
+              inputText: "Inspect the parser regression",
+              outputText: "The tokenizer strips escaped pipes before parsing.",
+              startedAt: "2026-03-18T12:00:00.000Z",
+              completedAt: "2026-03-18T12:00:04.000Z",
+              internals: [
+                {
+                  id: "subagent-tool-1",
+                  createdAt: "2026-03-18T12:00:01.000Z",
+                  label: "Glob",
+                  detail: "src/**/*.ts",
+                  tone: "tool",
+                  toolTitle: "Glob",
+                  itemType: "dynamic_tool_call",
+                  childSessionId: "child-1",
+                },
+              ],
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-18T12:00:05.000Z"
+        expandedWorkGroups={{ "subagent:child-1": true }}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-subagent-card="true"');
+    expect(markup).toContain("Research helper");
+    expect(markup).toContain("Runtime");
+    expect(markup).toContain('aria-label="Collapse subagent details"');
+    expect(markup).toContain("Inspect the parser regression");
+    expect(markup).toContain("The tokenizer strips escaped pipes before parsing.");
+    expect(markup).toContain("1 runtime event");
+    expect(markup).toContain("src/**/*.ts");
+  });
+
+  it("renders deliberate running subagent output state copy", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "subagent:child-2",
+            kind: "subagent",
+            createdAt: "2026-03-18T12:00:00.000Z",
+            subagent: {
+              childSessionId: "child-2",
+              title: "Search helper",
+              status: "running",
+              inputText: "Scan for websocket retry regressions",
+              startedAt: "2026-03-18T12:00:00.000Z",
+              internals: [],
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-18T12:00:05.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Search helper");
+    expect(markup).toContain("Runtime");
+    expect(markup).toContain('aria-label="Expand subagent details"');
+    expect(markup).not.toContain("Awaiting final output");
+  });
 });

@@ -11,6 +11,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { SyncStatusBanner } from "../components/SyncStatusBanner";
 import { hydrateAppSettingsFromSerialized, readPersistedAppSettingsValue } from "../appSettings";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
@@ -60,6 +61,7 @@ function RootRouteView() {
       <AnchoredToastProvider>
         <EventRouter />
         <DesktopProjectBootstrap />
+        <SyncStatusBanner />
         <Outlet />
       </AnchoredToastProvider>
     </ToastProvider>
@@ -140,6 +142,8 @@ function errorDetails(error: unknown): string {
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
+  const upsertDevServerStatus = useStore((store) => store.upsertDevServerStatus);
+  const appendDevServerLogLine = useStore((store) => store.appendDevServerLogLine);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
@@ -238,6 +242,13 @@ function EventRouter() {
       }
       domainEventFlushThrottler.maybeExecute();
     });
+    const unsubDevServerStatus = api.devServer.onStatusChanged((info) => {
+      upsertDevServerStatus(info);
+    });
+    const unsubDevServerLogLine = api.devServer.onLogLine((payload) => {
+      appendDevServerLogLine(payload);
+    });
+
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
       if (hasRunningSubprocess === null) {
@@ -258,6 +269,16 @@ function EventRouter() {
         // by the event.sequence <= latestSequence guard.
         latestSequence = 0;
         await syncSnapshot();
+
+        // Seed dev server statuses from server on (re)connect
+        try {
+          const statuses = await api.devServer.getStatuses();
+          for (const info of statuses) {
+            upsertDevServerStatus(info);
+          }
+        } catch {
+          // Best-effort seeding — push events will keep state up to date
+        }
         if (disposed) {
           return;
         }
@@ -333,6 +354,8 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
+      unsubDevServerStatus();
+      unsubDevServerLogLine();
       unsubWelcome();
       unsubServerConfigUpdated();
     };
@@ -342,6 +365,8 @@ function EventRouter() {
     removeOrphanedTerminalStates,
     setProjectExpanded,
     syncServerReadModel,
+    upsertDevServerStatus,
+    appendDevServerLogLine,
   ]);
 
   return null;

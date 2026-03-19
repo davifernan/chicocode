@@ -345,6 +345,46 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("keeps started entries for inline subagent cards", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-started",
+          kind: "tool.started",
+          summary: "Research helper started",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            title: "Research helper",
+            status: "inProgress",
+            data: {
+              childSessionId: "child-1",
+              parentSessionId: "parent-1",
+              title: "Research helper",
+              status: "inProgress",
+              startedAt: "2026-02-23T00:00:01.000Z",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toMatchObject([
+      {
+        id: "subagent-started",
+        itemType: "collab_agent_tool_call",
+        childSessionId: "child-1",
+        subagentCard: {
+          childSessionId: "child-1",
+          parentSessionId: "parent-1",
+          title: "Research helper",
+          status: "running",
+          startedAt: "2026-02-23T00:00:01.000Z",
+        },
+      },
+    ]);
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -513,6 +553,36 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/session-logic.ts",
     ]);
   });
+
+  it("captures subagent identity on nested child tool activities", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-tool",
+          kind: "tool.completed",
+          summary: "Glob",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Glob",
+            detail: "src/**/*.ts",
+            data: {
+              childSessionId: "child-1",
+              parentSessionId: "parent-1",
+              subagentTitle: "Research helper",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      id: "subagent-tool",
+      childSessionId: "child-1",
+      toolTitle: "Glob",
+      detail: "src/**/*.ts",
+    });
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -551,6 +621,220 @@ describe("deriveTimelineEntries", () => {
       kind: "proposed-plan",
       proposedPlan: {
         planMarkdown: "# Ship it",
+      },
+    });
+  });
+
+  it("aggregates subagent lifecycle and nested tool work into a dedicated timeline card", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-1"),
+          role: "user",
+          text: "Investigate the parser bug",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            parentSessionId: "parent-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Inspect the parser regression",
+            startedAt: "2026-02-23T00:00:01.000Z",
+          },
+        },
+        {
+          id: "subagent-tool",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Glob",
+          detail: "src/**/*.ts",
+          tone: "tool",
+          itemType: "dynamic_tool_call",
+          toolTitle: "Glob",
+          childSessionId: "child-1",
+        },
+        {
+          id: "subagent-completed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          label: "Research helper",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            parentSessionId: "parent-1",
+            title: "Research helper",
+            status: "completed",
+            inputText: "Inspect the parser regression",
+            outputText: "The tokenizer strips escaped pipes before parsing.",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:03.000Z",
+          },
+        },
+        {
+          id: "generic-tool",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          label: "Ran tests",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "subagent", "work"]);
+    expect(entries[1]).toMatchObject({
+      kind: "subagent",
+      subagent: {
+        childSessionId: "child-1",
+        title: "Research helper",
+        status: "completed",
+        inputText: "Inspect the parser regression",
+        outputText: "The tokenizer strips escaped pipes before parsing.",
+        completedAt: "2026-02-23T00:00:03.000Z",
+        internals: [
+          {
+            id: "subagent-tool",
+            toolTitle: "Glob",
+            detail: "src/**/*.ts",
+          },
+        ],
+      },
+    });
+    expect(entries[2]).toMatchObject({
+      kind: "work",
+      entry: {
+        id: "generic-tool",
+        label: "Ran tests",
+      },
+    });
+  });
+
+  it("suppresses duplicate task bridge rows when the subagent card already captures that lifecycle", () => {
+    const entries = deriveTimelineEntries(
+      [],
+      [],
+      [
+        {
+          id: "task-start",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          label: "Task",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "task-start-duplicate",
+          createdAt: "2026-02-23T00:00:00.500Z",
+          label: "Task completed",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "task-input-echo",
+          createdAt: "2026-02-23T00:00:00.750Z",
+          label: "Find all MD files",
+          tone: "tool",
+        },
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Find all MD files",
+            startedAt: "2026-02-23T00:00:01.000Z",
+          },
+        },
+        {
+          id: "subagent-completed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          label: "Research helper",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "completed",
+            inputText: "Find all MD files",
+            outputText: "README.md\ndocs/guide.md",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:03.000Z",
+          },
+        },
+        {
+          id: "task-result-echo",
+          createdAt: "2026-02-23T00:00:03.500Z",
+          label: "Task",
+          detail: "task_id: abc123 <task_result>README.md\ndocs/guide.md</task_result>",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+      ],
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: "subagent",
+      subagent: {
+        childSessionId: "child-1",
+        inputText: "Find all MD files",
+        outputText: "README.md\ndocs/guide.md",
+      },
+    });
+  });
+
+  it("keeps unrelated task rows when they do not match the subagent bridge heuristic", () => {
+    const entries = deriveTimelineEntries(
+      [],
+      [],
+      [
+        {
+          id: "task-row",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          label: "Task",
+          detail: "Prepare release notes",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Find all MD files",
+            startedAt: "2026-02-23T00:00:05.000Z",
+          },
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["work", "subagent"]);
+    expect(entries[0]).toMatchObject({
+      kind: "work",
+      entry: {
+        id: "task-row",
+        detail: "Prepare release notes",
       },
     });
   });

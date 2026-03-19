@@ -28,6 +28,7 @@ import Migration0013 from "./Migrations/013_ProjectionThreadProposedPlans.ts";
 import Migration0014 from "./Migrations/014_ProviderBindings.ts";
 import Migration0015 from "./Migrations/015_UiState.ts";
 import Migration0016 from "./Migrations/016_ProviderThreadCatalogMirrorState.ts";
+import Migration0017 from "./Migrations/017_SyncCursors.ts";
 import { Effect } from "effect";
 
 /**
@@ -57,6 +58,7 @@ const loader = Migrator.fromRecord({
   "14_ProviderBindings": Migration0014,
   "15_UiState": Migration0015,
   "16_ProviderThreadCatalogMirrorState": Migration0016,
+  "17_SyncCursors": Migration0017,
 });
 
 /**

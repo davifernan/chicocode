@@ -59,6 +59,8 @@ function makeState(thread: Thread): AppState {
     ],
     threads: [thread],
     threadsHydrated: true,
+    devServerByProjectId: {},
+    devServerLogsByProjectId: {},
   };
 }
 
@@ -212,6 +214,8 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
 
     const next = reorderProjects(state, project1, project3);
@@ -243,6 +247,8 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
 
     const next = setProjectExpanded(state, project2, true);
@@ -286,6 +292,8 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
 
     const next = setProjectExpanded(state, project3, true, 2);
@@ -349,6 +357,8 @@ describe("store read model sync", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
     const readModel: OrchestrationSummaryReadModel = {
       snapshotSequence: 2,

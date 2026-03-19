@@ -50,7 +50,7 @@ export class OpenCodeSessionDiscovery {
    */
   async discoverSessions(directory: string): Promise<DiscoveredOpenCodeSession[]> {
     const sessions = await this.client.listSessions(directory, { roots: true });
-    return sessions.map((s) => mapSession(s, directory));
+    return sessions.filter(isRootSession).map((s) => mapSession(s, directory));
   }
 
   /**
@@ -69,6 +69,9 @@ export class OpenCodeSessionDiscovery {
     const sessions = await this.client.listSessions("/", { limit });
     const seen = new Set<string>();
     for (const s of sessions) {
+      if (!isRootSession(s)) {
+        continue;
+      }
       const dir = s.directory;
       if (dir && dir !== "/" && !seen.has(dir)) {
         seen.add(dir);
@@ -103,4 +106,8 @@ function mapSession(raw: OpenCodeSession, directory: string): DiscoveredOpenCode
     slug: raw.slug ?? raw.id,
     parentId: raw.parentID ?? undefined,
   };
+}
+
+function isRootSession(session: OpenCodeSession): boolean {
+  return (session.parentID ?? "").trim().length === 0;
 }

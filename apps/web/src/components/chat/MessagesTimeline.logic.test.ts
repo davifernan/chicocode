@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
+import {
+  computeMessageDurationStart,
+  getDistinctWorkEntryPreview,
+  normalizeCompactToolLabel,
+} from "./MessagesTimeline.logic";
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -141,5 +145,19 @@ describe("normalizeCompactToolLabel", () => {
 
   it("removes trailing completion wording from other labels", () => {
     expect(normalizeCompactToolLabel("Read file completed")).toBe("Read file");
+  });
+});
+
+describe("getDistinctWorkEntryPreview", () => {
+  it("suppresses previews that match the heading case-insensitively", () => {
+    expect(getDistinctWorkEntryPreview("Glob", "glob")).toBeNull();
+  });
+
+  it("suppresses previews that only differ by compact separators", () => {
+    expect(getDistinctWorkEntryPreview("Read File", "read-file")).toBeNull();
+  });
+
+  it("keeps previews when they add useful detail", () => {
+    expect(getDistinctWorkEntryPreview("Glob", "src/**/*.ts")).toBe("src/**/*.ts");
   });
 });

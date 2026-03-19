@@ -55,7 +55,11 @@ export const ServerConfig = Schema.Struct({
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
-export const ServerUiStateKey = Schema.Literals(["appSettings", "rendererState"]);
+export const ServerUiStateKey = Schema.Literals([
+  "appSettings",
+  "rendererState",
+  "remoteHostConfig",
+]);
 export type ServerUiStateKey = typeof ServerUiStateKey.Type;
 
 export const ServerGetUiStateInput = Schema.Struct({

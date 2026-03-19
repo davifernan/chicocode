@@ -152,6 +152,22 @@ function getSafeExternalUrl(rawUrl: unknown): string | null {
   return parsedUrl.toString();
 }
 
+/**
+ * Returns true only for URLs using the app's own custom scheme (production builds).
+ * localhost URLs are intentionally NOT treated as internal — they belong to user
+ * dev servers and must open in the system browser via shell.openExternal.
+ * Popout windows are now opened directly via the openOrFocusDevLogsPopout IPC
+ * handler, so window.open() is no longer used for internal navigation.
+ */
+function isInternalAppUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === `${DESKTOP_SCHEME}:`;
+  } catch {
+    return false;
+  }
+}
+
 function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   if (rawTheme === "light" || rawTheme === "dark" || rawTheme === "system") {
     return rawTheme;
@@ -1168,6 +1184,51 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(OPEN_EXTERNAL_CHANNEL);
+  ipcMain.handle("desktop:open-or-focus-dev-logs-popout", async () => {
+    // If the popout is already open (anywhere — minimized, behind, another Space) focus it.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win === mainWindow) continue;
+      const url = win.webContents.getURL();
+      if (!url.includes("dev-logs-popout")) continue;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+      win.moveTop();
+      return;
+    }
+
+    // Not open — create a new popout BrowserWindow directly from the main process.
+    // This avoids window.open() in the renderer which can interfere with the main window.
+    const viteDevUrl = process.env.VITE_DEV_SERVER_URL;
+    const popoutUrl = viteDevUrl
+      ? `${viteDevUrl.replace(/\/$/, "")}/#/dev-logs-popout`
+      : `${DESKTOP_SCHEME}://app/index.html#/dev-logs-popout`;
+
+    const popoutWin = new BrowserWindow({
+      width: 960,
+      height: 720,
+      minWidth: 480,
+      minHeight: 400,
+      show: false,
+      autoHideMenuBar: true,
+      title: APP_DISPLAY_NAME,
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: { x: 16, y: 18 },
+      ...getIconOption(),
+      webPreferences: {
+        preload: Path.join(__dirname, "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    await popoutWin.loadURL(popoutUrl);
+    popoutWin.once("ready-to-show", () => {
+      popoutWin.show();
+    });
+  });
+
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (_event, rawUrl: unknown) => {
     const externalUrl = getSafeExternalUrl(rawUrl);
     if (!externalUrl) {
@@ -1269,6 +1330,30 @@ function createWindow(): BrowserWindow {
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
+    // Internal app URLs (same-origin pages like /dev-logs-popout) must open inside
+    // Electron as a proper BrowserWindow, not in the system browser.
+    if (isInternalAppUrl(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 960,
+          height: 720,
+          minWidth: 480,
+          minHeight: 400,
+          autoHideMenuBar: true,
+          title: APP_DISPLAY_NAME,
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 16, y: 18 },
+          webPreferences: {
+            preload: Path.join(__dirname, "preload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      };
+    }
+
     const externalUrl = getSafeExternalUrl(url);
     if (externalUrl) {
       void shell.openExternal(externalUrl);

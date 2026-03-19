@@ -4,7 +4,8 @@ import { TrimmedNonEmptyString, type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 
-import { persistServerUiState } from "./serverUiState";
+import { hydrateServerUiState, persistServerUiState } from "./serverUiState";
+import { readNativeApi } from "./nativeApi";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -264,12 +265,62 @@ export function hydrateAppSettingsFromSerialized(value: string | null): void {
   );
 }
 
+// ── Server-backed persistence ─────────────────────────────────────────
+
+/**
+ * Module-level guard: startup hydration from server runs exactly once per
+ * page load regardless of how many useAppSettings() callers are mounted.
+ */
+let _serverHydrationStarted = false;
+
+/**
+ * Kick off a one-time load of app settings from the server DB.
+ * Falls back to the existing localStorage value if the server has nothing.
+ *
+ * Call from the first useAppSettings() mount.
+ */
+function startServerHydration(): void {
+  if (_serverHydrationStarted) return;
+  _serverHydrationStarted = true;
+
+  void hydrateServerUiState({
+    key: "appSettings",
+    readLegacyValue: readPersistedAppSettingsValue,
+    onHydrate: hydrateAppSettingsFromSerialized,
+  });
+}
+
+/**
+ * Immediately write the current settings to the server DB.
+ * Returns a promise that resolves when the write completes.
+ *
+ * Used by the manual "Sync" button in SettingsModal.
+ */
+export async function forceSyncAppSettingsToServer(): Promise<void> {
+  const api = readNativeApi();
+  if (!api) throw new Error("Server API not available. Is the T3 server running?");
+
+  const valueJson = readPersistedAppSettingsValue();
+  if (valueJson === null) {
+    throw new Error("No settings found in local storage.");
+  }
+
+  await api.server.upsertUiState({ key: "appSettings", valueJson });
+}
+
 export function useAppSettings() {
   const [settings, setSettings] = useLocalStorage(
     APP_SETTINGS_STORAGE_KEY,
     DEFAULT_APP_SETTINGS,
     AppSettingsSchema,
   );
+
+  // Load settings from the server DB once on first mount.
+  // This restores settings that survived a server restart or were saved from
+  // another browser/machine via the Sync button.
+  useEffect(() => {
+    startServerHydration();
+  }, []);
 
   // Keep server UI state in sync whenever settings change.
   useEffect(() => {

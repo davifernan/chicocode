@@ -144,6 +144,9 @@ export class OpenCodeSessionSync {
     const errors: Array<{ sessionId: string; error: string }> = [];
 
     for (const session of discovered) {
+      if (session.parentId?.trim()) {
+        continue;
+      }
       try {
         const externalUpdatedAt = toIsoFromEpochMs(session.updatedAt);
         const existing = existingCatalogEntries.get(session.sessionId);

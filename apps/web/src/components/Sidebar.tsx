@@ -6,6 +6,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   RocketIcon,
+  ServerIcon,
   SettingsIcon,
   StarIcon,
   SquarePenIcon,
@@ -99,6 +100,11 @@ import {
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { getServerHttpOrigin, serverApiUrl } from "~/lib/serverOrigin";
+import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
+import { RemoteConnectModal } from "./RemoteConnectModal";
+import { RemoteStatusStrip } from "./RemoteStatusStrip";
+import { SettingsModal } from "./SettingsModal";
+import type { SettingsSectionId } from "./SettingsPanel";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -247,6 +253,7 @@ function SortableProjectItem({
 export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
+  const devServerByProjectId = useStore((store) => store.devServerByProjectId);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleThreadStarred = useStore((store) => store.toggleThreadStarred);
@@ -322,6 +329,14 @@ export default function Sidebar() {
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const [isRemoteModalOpen, setIsRemoteModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("appearance");
+
+  const openSettings = useCallback((section: SettingsSectionId = "appearance") => {
+    setSettingsSection(section);
+    setIsSettingsOpen(true);
+  }, []);
   const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -1436,12 +1451,28 @@ export default function Sidebar() {
             </Alert>
           </SidebarGroup>
         ) : null}
+        <RemoteStatusStrip onOpenModal={() => setIsRemoteModalOpen(true)} />
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between px-2">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
               Projects
             </span>
             <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Remote connect"
+                      className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                      onClick={() => setIsRemoteModalOpen(true)}
+                    />
+                  }
+                >
+                  <ServerIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="right">Remote connect</TooltipPopup>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1612,6 +1643,13 @@ export default function Sidebar() {
                               <span className="flex-1 truncate text-xs font-medium text-foreground/90">
                                 {project.name}
                               </span>
+                              {devServerByProjectId[project.id]?.status === "running" && (
+                                <span
+                                  className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+                                  aria-label="Dev server running"
+                                  title="Dev server running"
+                                />
+                              )}
                             </SidebarMenuButton>
                             <Tooltip>
                               <TooltipTrigger
@@ -1727,7 +1765,7 @@ export default function Sidebar() {
                                       }}
                                     >
                                       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-                                        {isServerThread && (
+                                        {isServerThread ? (
                                           <Tooltip>
                                             <TooltipTrigger
                                               render={
@@ -1737,7 +1775,7 @@ export default function Sidebar() {
                                                     isStarred ? "Unstar chat" : "Star chat"
                                                   }
                                                   data-thread-selection-safe
-                                                  className={`inline-flex items-center justify-center rounded-sm p-0.5 outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring ${
+                                                  className={`inline-flex size-4 shrink-0 items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring ${
                                                     isStarred
                                                       ? "text-amber-500 opacity-100 hover:text-amber-400"
                                                       : isHighlighted
@@ -1759,6 +1797,8 @@ export default function Sidebar() {
                                               {isStarred ? "Unstar chat" : "Star chat"}
                                             </TooltipPopup>
                                           </Tooltip>
+                                        ) : (
+                                          <span aria-hidden="true" className="size-4 shrink-0" />
                                         )}
                                         {prStatus && (
                                           <Tooltip>
@@ -1922,6 +1962,7 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
+      <ConnectionStatusBadge onOpenSettings={openSettings} />
       <SidebarFooter className="p-2">
         <SidebarMenu>
           <SidebarMenuItem>
@@ -1938,7 +1979,7 @@ export default function Sidebar() {
               <SidebarMenuButton
                 size="sm"
                 className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                onClick={() => void navigate({ to: "/settings" })}
+                onClick={() => openSettings()}
               >
                 <SettingsIcon className="size-3.5" />
                 <span className="text-xs">Settings</span>
@@ -1947,6 +1988,13 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <RemoteConnectModal open={isRemoteModalOpen} onOpenChange={setIsRemoteModalOpen} />
+      <SettingsModal
+        open={isSettingsOpen}
+        onOpenChange={setIsSettingsOpen}
+        defaultSection={settingsSection}
+      />
     </>
   );
 }

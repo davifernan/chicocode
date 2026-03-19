@@ -26,6 +26,15 @@ import type {
 } from "./project";
 import type { ServerConfig, ServerGetUiStateInput, ServerGetUiStateResult } from "./server";
 import type {
+  RemoteConnectionStatus,
+  RemoteHostConfig,
+  RemoteServerMetrics,
+  RemoteSyncStatus,
+  SyncReceiveResult,
+  SyncThreadManifestEntry,
+  TestRemoteConnectionResult,
+} from "./remoteHost";
+import type {
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -52,6 +61,14 @@ import type {
   OrchestrationSummaryReadModel,
 } from "./orchestration";
 import { EditorId } from "./editor";
+import type {
+  DevServerGetLogsInput,
+  DevServerGetStatusInput,
+  DevServerInfo,
+  DevServerLogLinePayload,
+  DevServerStartInput,
+  DevServerStopInput,
+} from "./devServer";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -115,6 +132,11 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /**
+   * Open the dev-logs popout window (or bring it to the foreground if already open).
+   * Creates the window directly from the main process — does NOT use window.open().
+   */
+  openOrFocusDevLogsPopout: () => Promise<void>;
 }
 
 export interface NativeApi {
@@ -180,5 +202,28 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
+  };
+  devServer: {
+    start: (input: DevServerStartInput) => Promise<DevServerInfo>;
+    stop: (input: DevServerStopInput) => Promise<void>;
+    getStatus: (input: DevServerGetStatusInput) => Promise<DevServerInfo>;
+    getStatuses: () => Promise<DevServerInfo[]>;
+    getLogs: (input: DevServerGetLogsInput) => Promise<string[]>;
+    onStatusChanged: (callback: (info: DevServerInfo) => void) => () => void;
+    onLogLine: (callback: (payload: DevServerLogLinePayload) => void) => () => void;
+  };
+  remoteHost: {
+    setConfig: (config: RemoteHostConfig | null) => Promise<void>;
+    testConnection: (config: RemoteHostConfig) => Promise<TestRemoteConnectionResult>;
+    onConnectionStatus: (callback: (status: RemoteConnectionStatus) => void) => () => void;
+    onSyncStatus: (callback: (status: RemoteSyncStatus) => void) => () => void;
+    onMetrics: (callback: (metrics: RemoteServerMetrics) => void) => () => void;
+  };
+  sync: {
+    getThreadManifest: () => Promise<{ threads: SyncThreadManifestEntry[] }>;
+    /** Export all events for a thread. The caller is responsible for sending them to the remote. */
+    exportThreadEvents: (threadId: string) => Promise<{ events: OrchestrationEvent[] }>;
+    /** Receive and idempotently append events from a sync peer. */
+    receiveEvents: (events: OrchestrationEvent[]) => Promise<SyncReceiveResult>;
   };
 }

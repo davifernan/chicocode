@@ -151,7 +151,8 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
-import { ChatHeader } from "./chat/ChatHeader";
+import { ChatHeader, type RightPanelMode } from "./chat/ChatHeader";
+import { DevLogsPanel } from "./chat/DevLogsPanel";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
@@ -180,6 +181,7 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { PopoutBroadcaster } from "../lib/devLogsPopoutChannel";
 
 interface OpenCodeComposerProviderModel {
   readonly id: string;
@@ -421,6 +423,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const hydrateStoreThreadMessages = useStore((store) => store.hydrateThreadMessages);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
+  const devServerByProjectId = useStore((store) => store.devServerByProjectId);
+  const devServerLogsByProjectId = useStore((store) => store.devServerLogsByProjectId);
   const { settings } = useAppSettings();
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
@@ -520,6 +524,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [devLogsOpen, setDevLogsOpen] = useState(false);
+  const [devLogsPanelWidth, setDevLogsPanelWidth] = useState(() =>
+    parseInt(localStorage.getItem("t3code:dev-logs-width") ?? "384", 10),
+  );
+  const devLogsPanelWidthRef = useRef(devLogsPanelWidth);
+  const popoutWindowRef = useRef<Window | null>(null);
+  const popoutChannelRef = useRef<PopoutBroadcaster | null>(null);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -1516,6 +1527,136 @@ export default function ChatView({ threadId }: ChatViewProps) {
       },
     });
   }, [diffOpen, navigate, threadId]);
+
+  // rightPanelMode: derived from URL diff param + local devLogsOpen state
+  const rightPanelMode: RightPanelMode | null = diffOpen ? "diff" : devLogsOpen ? "dev-logs" : null;
+
+  const onRightPanelModeChange = useCallback(
+    (mode: RightPanelMode | null) => {
+      if (mode === "diff" || mode === null) {
+        // Toggling diff: use URL nav
+        const openDiff = mode === "diff";
+        void navigate({
+          to: "/$threadId",
+          params: { threadId },
+          replace: true,
+          search: (previous) => {
+            const rest = stripDiffSearchParams(previous);
+            return openDiff ? { ...rest, diff: "1" } : { ...rest, diff: undefined };
+          },
+        });
+        // Close dev logs if opening diff
+        if (openDiff) setDevLogsOpen(false);
+      }
+      if (mode === "dev-logs") {
+        setDevLogsOpen(true);
+        // Close diff if opening dev logs
+        void navigate({
+          to: "/$threadId",
+          params: { threadId },
+          replace: true,
+          search: (previous) => {
+            const rest = stripDiffSearchParams(previous);
+            return { ...rest, diff: undefined };
+          },
+        });
+      }
+      if (mode === null) {
+        setDevLogsOpen(false);
+      }
+    },
+    [navigate, threadId],
+  );
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = devLogsPanelWidthRef.current;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      // Dragging left (negative delta) grows the panel
+      const delta = startX - moveEvent.clientX;
+      const newWidth = Math.max(240, Math.min(800, startWidth + delta));
+      setDevLogsPanelWidth(newWidth);
+      devLogsPanelWidthRef.current = newWidth;
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      localStorage.setItem("t3code:dev-logs-width", String(devLogsPanelWidthRef.current));
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
+
+  // Always-fresh ref to the active-project broadcast payload.
+  // Avoids stale closures inside the broadcaster's sync-request handler.
+  const buildActiveProjectMsg = useCallback(() => {
+    if (!activeProject) return null;
+    return {
+      type: "active-project" as const,
+      projectId: activeProject.id,
+      projectName: activeProject.name,
+      devServerRunning: devServerByProjectId[activeProject.id]?.status === "running",
+    };
+  }, [activeProject, devServerByProjectId]);
+
+  const buildActiveProjectMsgRef = useRef(buildActiveProjectMsg);
+  useEffect(() => {
+    buildActiveProjectMsgRef.current = buildActiveProjectMsg;
+  }, [buildActiveProjectMsg]);
+
+  // Lazily initialise the broadcaster and register the sync-request handler.
+  // Called before every popout open so the handler is always wired up.
+  const ensureBroadcaster = useCallback(() => {
+    if (popoutChannelRef.current) return popoutChannelRef.current;
+    const broadcaster = new PopoutBroadcaster();
+    // Use a ref so the handler always calls the freshest buildActiveProjectMsg
+    // even if it was recreated since the broadcaster was created.
+    broadcaster.onSyncRequest(() => {
+      const msg = buildActiveProjectMsgRef.current();
+      if (msg) broadcaster.send(msg);
+    });
+    popoutChannelRef.current = broadcaster;
+    return broadcaster;
+  }, []);
+
+  const handlePopout = useCallback(async () => {
+    // Always init the broadcaster first so broadcasts are ready even before
+    // the window is fully loaded (the popout sends "request-sync" on mount).
+    ensureBroadcaster();
+
+    if (isElectron && window.desktopBridge) {
+      // Main process creates / focuses the window directly — no window.open().
+      // This prevents the renderer's window.open() from ever touching the main window.
+      await window.desktopBridge.openOrFocusDevLogsPopout();
+      return;
+    }
+
+    // Browser (non-Electron) fallback — window.open() is fine here.
+    if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+      popoutWindowRef.current.focus();
+      return;
+    }
+    const win = window.open(
+      "/dev-logs-popout",
+      "t3code-dev-logs-popout",
+      "width=960,height=720,menubar=no,toolbar=no,location=no,resizable=yes,scrollbars=yes",
+    );
+    popoutWindowRef.current = win;
+  }, [ensureBroadcaster]);
+
+  const handleDevServerRestart = useCallback(async () => {
+    if (!activeProject) return;
+    const api = readNativeApi();
+    if (!api) return;
+    await api.devServer.stop({ projectId: activeProject.id });
+    // Brief delay so the process has time to exit before we re-spawn
+    await new Promise<void>((r) => setTimeout(r, 800));
+    await api.devServer.start({ projectId: activeProject.id, cwd: activeProject.cwd });
+  }, [activeProject]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -2626,6 +2767,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
     onToggleDiff,
     toggleTerminalVisibility,
   ]);
+
+  // Broadcast active project info to the popout window whenever it changes
+  useEffect(() => {
+    if (!activeProject || !popoutChannelRef.current) return;
+    popoutChannelRef.current.send({
+      type: "active-project",
+      projectId: activeProject.id,
+      projectName: activeProject.name,
+      devServerRunning: devServerByProjectId[activeProject.id]?.status === "running",
+    });
+  }, [activeProject, devServerByProjectId]);
+
+  // Cleanup broadcaster on unmount
+  useEffect(
+    () => () => {
+      popoutChannelRef.current?.close();
+    },
+    [],
+  );
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
@@ -3933,6 +4093,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          activeProjectId={activeProject?.id as import("@t3tools/contracts").ProjectId | undefined}
+          activeProjectCwd={activeProject?.cwd}
           isGitRepo={isGitRepo}
           openInCwd={activeThread.worktreePath ?? activeProject?.cwd ?? null}
           activeProjectScripts={activeProject?.scripts}
@@ -3943,14 +4105,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
-          diffOpen={diffOpen}
+          rightPanelMode={rightPanelMode}
+          devServerInfo={activeProject ? devServerByProjectId[activeProject.id] : undefined}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
           }}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
-          onToggleDiff={onToggleDiff}
+          onRightPanelModeChange={onRightPanelModeChange}
         />
       </header>
 
@@ -4648,6 +4811,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
               }
             }}
           />
+        ) : null}
+
+        {/* Dev logs panel — resizable */}
+        {devLogsOpen && activeProject ? (
+          <div className="flex min-h-0 shrink-0" style={{ width: devLogsPanelWidth }}>
+            {/* Drag handle on the left edge — drag left to expand */}
+            <div
+              className="w-1 shrink-0 cursor-col-resize bg-border/50 transition-colors hover:bg-primary/40 active:bg-primary/60"
+              onMouseDown={handleResizeMouseDown}
+            />
+            <DevLogsPanel
+              logs={devServerLogsByProjectId[activeProject.id] ?? []}
+              serverUrl={devServerByProjectId[activeProject.id]?.url}
+              packageManager={devServerByProjectId[activeProject.id]?.packageManager}
+              projectName={activeProject.name}
+              onPopout={() => void handlePopout()}
+              onRestart={handleDevServerRestart}
+              className="min-w-0 flex-1 border-l border-border"
+            />
+          </div>
         ) : null}
       </div>
       {/* end horizontal flex container */}

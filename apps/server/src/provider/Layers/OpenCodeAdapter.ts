@@ -43,6 +43,7 @@ import {
 import { normalizeOpenCodeTodos, normalizeOpenCodeUsage } from "../../opencode/providerMetadata.ts";
 
 const PROVIDER = "opencode" as const;
+const MAX_CHILD_SESSION_SNAPSHOT_CHARS = 4_000;
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -72,12 +73,14 @@ function nowIso(): string {
 
 // ── SSE → ProviderRuntimeEvent mapping ────────────────────────────
 
-interface OpenCodeSessionState {
+export interface OpenCodeSessionState {
   readonly sessionId: string;
   readonly directory: string;
+  childSessionsById: Map<string, OpenCodeChildSessionState>;
   activeTurnId: TurnId | null;
   interruptedTurnId: TurnId | null;
   messageRoleById: Map<string, string>;
+  messageSessionIdById: Map<string, string>;
   pendingQuestionIds: Map<string, ReadonlyArray<string>>;
   partTypes: Map<string, string>;
   partTextById: Map<string, string>;
@@ -89,6 +92,37 @@ interface OpenCodeSessionState {
     readonly providerID: string;
     readonly modelID: string;
   } | null;
+}
+
+export interface OpenCodeChildSessionState {
+  readonly childSessionId: string;
+  readonly parentSessionId: string;
+  title: string | null;
+  status: "inProgress" | "completed" | "failed";
+  inputText: string;
+  outputText: string;
+  errorMessage: string | null;
+  statusDetail: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  lastSnapshotFingerprint: string | null;
+}
+
+function getOpenCodeChildSessionParentId(
+  eventType: string,
+  properties: Record<string, unknown>,
+): string | undefined {
+  if (eventType !== "session.created") {
+    return undefined;
+  }
+
+  const info = asRecord(properties.info);
+  return asTrimmedString(info?.parentID);
+}
+
+function getOpenCodeChildSessionId(properties: Record<string, unknown>): string | undefined {
+  const info = asRecord(properties.info);
+  return asTrimmedString(info?.sessionID) ?? asTrimmedString(info?.id);
 }
 
 function asString(value: unknown): string | undefined {
@@ -209,7 +243,10 @@ function toUserInputQuestions(properties: Record<string, unknown>, requestId: st
   return parsed.length > 0 ? parsed : undefined;
 }
 
-function getOpenCodeEventSessionId(properties: Record<string, unknown>): string | undefined {
+export function getOpenCodeEventSessionId(
+  eventType: string,
+  properties: Record<string, unknown>,
+): string | undefined {
   const directSessionId = asString(properties.sessionID)?.trim();
   if (directSessionId) {
     return directSessionId;
@@ -222,7 +259,7 @@ function getOpenCodeEventSessionId(properties: Record<string, unknown>): string 
   }
 
   const infoId = asString(info?.id)?.trim();
-  if (infoId) {
+  if (infoId && eventType.startsWith("session.")) {
     return infoId;
   }
 
@@ -230,6 +267,271 @@ function getOpenCodeEventSessionId(properties: Record<string, unknown>): string 
   const partSessionId = asString(part?.sessionID)?.trim();
   if (partSessionId) {
     return partSessionId;
+  }
+
+  return undefined;
+}
+
+type OpenCodeTrackedSessionLike = Pick<OpenCodeSessionState, "sessionId" | "directory"> & {
+  readonly childSessionsById?: ReadonlyMap<string, OpenCodeChildSessionState>;
+};
+
+export function resolveOpenCodeEventTarget<T extends OpenCodeTrackedSessionLike>(
+  sseEvent: OpenCodeSseEvent,
+  sessions: Iterable<readonly [string, T]>,
+):
+  | {
+      readonly threadId: ThreadId;
+      readonly session: T;
+    }
+  | undefined {
+  const properties = asRecord(sseEvent.payload.properties) ?? {};
+  const parentSessionId = getOpenCodeChildSessionParentId(sseEvent.payload.type, properties);
+
+  if (parentSessionId) {
+    for (const [threadId, session] of sessions) {
+      if (session.sessionId === parentSessionId) {
+        return { threadId: threadId as ThreadId, session };
+      }
+    }
+  }
+
+  const eventSessionId = getOpenCodeEventSessionId(sseEvent.payload.type, properties);
+
+  if (eventSessionId) {
+    for (const [threadId, session] of sessions) {
+      if (session.sessionId === eventSessionId) {
+        return { threadId: threadId as ThreadId, session };
+      }
+    }
+
+    for (const [threadId, session] of sessions) {
+      if (session.childSessionsById?.has(eventSessionId)) {
+        return { threadId: threadId as ThreadId, session };
+      }
+    }
+
+    return undefined;
+  }
+
+  for (const [threadId, session] of sessions) {
+    if (sseEvent.directory !== undefined && sseEvent.directory === session.directory) {
+      return { threadId: threadId as ThreadId, session };
+    }
+  }
+
+  const iterator = sessions[Symbol.iterator]();
+  const first = iterator.next();
+  if (!first.done && iterator.next().done) {
+    const [threadId, session] = first.value;
+    return { threadId: threadId as ThreadId, session };
+  }
+
+  return undefined;
+}
+
+function buildOpenCodeChildSessionCreatedEvent(
+  eventType: string,
+  sseEvent: OpenCodeSseEvent,
+  threadId: ThreadId,
+  sessionState: OpenCodeSessionState,
+  properties: Record<string, unknown>,
+): ProviderRuntimeEvent | null {
+  const info = asRecord(properties.info);
+  const parentSessionId = asTrimmedString(info?.parentID);
+  if (!parentSessionId) {
+    return null;
+  }
+
+  const childSessionId = getOpenCodeChildSessionId(properties);
+  if (!childSessionId) {
+    return null;
+  }
+
+  const childSession = upsertOpenCodeChildSession(sessionState, {
+    childSessionId,
+    parentSessionId,
+    ...(() => {
+      const title =
+        asTrimmedString(info?.title) ?? asTrimmedString(info?.name) ?? asTrimmedString(info?.agent);
+      return title ? { title } : {};
+    })(),
+  });
+
+  return buildOpenCodeChildSessionLifecycleEvent(
+    eventType,
+    sseEvent,
+    threadId,
+    sessionState,
+    childSession,
+    "item.started",
+  );
+}
+
+function truncateChildSessionSnapshotText(value: string): string {
+  if (value.length <= MAX_CHILD_SESSION_SNAPSHOT_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, MAX_CHILD_SESSION_SNAPSHOT_CHARS - 3)}...`;
+}
+
+function buildOpenCodeChildSessionTitle(childSession: OpenCodeChildSessionState): string {
+  return childSession.title ?? "Sub-agent";
+}
+
+function buildOpenCodeChildSessionDetail(
+  childSession: OpenCodeChildSessionState,
+  lifecycleType: "item.started" | "item.updated" | "item.completed",
+): string | undefined {
+  if (childSession.errorMessage) {
+    return childSession.errorMessage;
+  }
+  if (childSession.outputText) {
+    return childSession.outputText;
+  }
+  if (childSession.inputText) {
+    return childSession.inputText;
+  }
+  if (childSession.statusDetail) {
+    return childSession.statusDetail;
+  }
+  if (lifecycleType === "item.started") {
+    return `Started ${buildOpenCodeChildSessionTitle(childSession)}`;
+  }
+  return undefined;
+}
+
+function serializeOpenCodeChildSessionData(childSession: OpenCodeChildSessionState) {
+  return {
+    tool: "subagent",
+    childSessionId: childSession.childSessionId,
+    sessionId: childSession.childSessionId,
+    parentSessionId: childSession.parentSessionId,
+    status: childSession.status,
+    ...(childSession.title ? { title: childSession.title } : {}),
+    ...(childSession.inputText ? { inputText: childSession.inputText } : {}),
+    ...(childSession.outputText ? { outputText: childSession.outputText } : {}),
+    ...(childSession.errorMessage ? { errorMessage: childSession.errorMessage } : {}),
+    ...(childSession.statusDetail ? { statusDetail: childSession.statusDetail } : {}),
+    startedAt: childSession.startedAt,
+    ...(childSession.completedAt ? { completedAt: childSession.completedAt } : {}),
+    item: {
+      tool: "subagent",
+      result: {
+        sessionId: childSession.childSessionId,
+        parentSessionId: childSession.parentSessionId,
+        status: childSession.status,
+        ...(childSession.title ? { title: childSession.title } : {}),
+        ...(childSession.inputText ? { inputText: childSession.inputText } : {}),
+        ...(childSession.outputText ? { outputText: childSession.outputText } : {}),
+        ...(childSession.errorMessage ? { errorMessage: childSession.errorMessage } : {}),
+        ...(childSession.statusDetail ? { statusDetail: childSession.statusDetail } : {}),
+        startedAt: childSession.startedAt,
+        ...(childSession.completedAt ? { completedAt: childSession.completedAt } : {}),
+      },
+    },
+  };
+}
+
+function buildOpenCodeChildSessionLifecycleEvent(
+  eventType: string,
+  sseEvent: OpenCodeSseEvent,
+  threadId: ThreadId,
+  sessionState: OpenCodeSessionState,
+  childSession: OpenCodeChildSessionState,
+  lifecycleType: "item.started" | "item.updated" | "item.completed",
+): ProviderRuntimeEvent | null {
+  const fingerprint = JSON.stringify({
+    lifecycleType,
+    title: childSession.title,
+    status: childSession.status,
+    inputText: childSession.inputText,
+    outputText: childSession.outputText,
+    errorMessage: childSession.errorMessage,
+    statusDetail: childSession.statusDetail,
+    startedAt: childSession.startedAt,
+    completedAt: childSession.completedAt,
+  });
+  if (childSession.lastSnapshotFingerprint === fingerprint) {
+    return null;
+  }
+  childSession.lastSnapshotFingerprint = fingerprint;
+
+  const detail = buildOpenCodeChildSessionDetail(childSession, lifecycleType);
+
+  return {
+    ...createBaseFields(eventType, sseEvent, threadId),
+    ...(sessionState.activeTurnId ? { turnId: sessionState.activeTurnId } : {}),
+    itemId: RuntimeItemId.makeUnsafe(`subagent:${childSession.childSessionId}`),
+    type: lifecycleType,
+    payload: {
+      itemType: "collab_agent_tool_call",
+      status: childSession.status,
+      title: buildOpenCodeChildSessionTitle(childSession),
+      ...(detail ? { detail } : {}),
+      data: serializeOpenCodeChildSessionData(childSession),
+    },
+  };
+}
+
+function upsertOpenCodeChildSession(
+  sessionState: OpenCodeSessionState,
+  input: {
+    readonly childSessionId: string;
+    readonly parentSessionId: string;
+    readonly title?: string | null;
+  },
+): OpenCodeChildSessionState {
+  const existing = sessionState.childSessionsById.get(input.childSessionId);
+  if (existing) {
+    if (input.title) {
+      existing.title = input.title;
+    }
+    return existing;
+  }
+
+  const childSession: OpenCodeChildSessionState = {
+    childSessionId: input.childSessionId,
+    parentSessionId: input.parentSessionId,
+    title: input.title ?? null,
+    status: "inProgress",
+    inputText: "",
+    outputText: "",
+    errorMessage: null,
+    statusDetail: null,
+    startedAt: nowIso(),
+    completedAt: null,
+    lastSnapshotFingerprint: null,
+  };
+  sessionState.childSessionsById.set(input.childSessionId, childSession);
+  return childSession;
+}
+
+function openCodeChildSessionFromProperties(
+  eventType: string,
+  properties: Record<string, unknown>,
+  sessionState: OpenCodeSessionState,
+): OpenCodeChildSessionState | undefined {
+  const explicitSessionId = getOpenCodeEventSessionId(eventType, properties);
+  if (explicitSessionId) {
+    return sessionState.childSessionsById.get(explicitSessionId);
+  }
+
+  const messageSessionId = (() => {
+    const messageId = getOpenCodeMessageId(properties);
+    return messageId ? sessionState.messageSessionIdById.get(messageId) : undefined;
+  })();
+  if (messageSessionId) {
+    return sessionState.childSessionsById.get(messageSessionId);
+  }
+
+  if (eventType === "session.created") {
+    const info = asRecord(properties.info);
+    const parentSessionId = asTrimmedString(info?.parentID);
+    const childSessionId = getOpenCodeChildSessionId(properties);
+    if (parentSessionId === sessionState.sessionId && childSessionId) {
+      return sessionState.childSessionsById.get(childSessionId);
+    }
   }
 
   return undefined;
@@ -333,6 +635,7 @@ function buildOpenCodeToolLifecycleEvent(
   threadId: ThreadId,
   sessionState: OpenCodeSessionState,
   part: Record<string, unknown>,
+  childSession?: OpenCodeChildSessionState,
 ): ProviderRuntimeEvent | null {
   const partId = asTrimmedString(part.id);
   const state = asRecord(part.state);
@@ -370,6 +673,13 @@ function buildOpenCodeToolLifecycleEvent(
     stateStatus === "error" && title ? `${title} failed` : (title ?? toolName ?? "Tool");
   const payloadData = {
     ...(toolName ? { tool: toolName } : {}),
+    ...(childSession
+      ? {
+          childSessionId: childSession.childSessionId,
+          parentSessionId: childSession.parentSessionId,
+          ...(childSession.title ? { subagentTitle: childSession.title } : {}),
+        }
+      : {}),
     item: {
       ...(toolName ? { tool: toolName } : {}),
       ...(command ? { command } : {}),
@@ -454,18 +764,79 @@ function openCodePartStreamKind(
   return null;
 }
 
+function resolveOpenCodeEventScope(
+  eventType: string,
+  properties: Record<string, unknown>,
+  sessionState: OpenCodeSessionState,
+):
+  | { readonly scope: "parent"; readonly sessionId: string }
+  | { readonly scope: "child"; readonly childSession: OpenCodeChildSessionState } {
+  const childSession = openCodeChildSessionFromProperties(eventType, properties, sessionState);
+  if (childSession) {
+    return { scope: "child", childSession };
+  }
+  return { scope: "parent", sessionId: sessionState.sessionId };
+}
+
+function updateOpenCodeChildSessionText(
+  childSession: OpenCodeChildSessionState,
+  role: string,
+  text: string,
+) {
+  const nextText = truncateChildSessionSnapshotText(text);
+  if (role === "assistant") {
+    childSession.outputText = nextText;
+    if (nextText.length > 0 && childSession.status !== "failed") {
+      childSession.status = "inProgress";
+      childSession.completedAt = null;
+    }
+    return;
+  }
+  if (role === "user") {
+    childSession.inputText = nextText;
+  }
+}
+
+function updateOpenCodeChildSessionStatus(
+  childSession: OpenCodeChildSessionState,
+  input: {
+    readonly status?: OpenCodeChildSessionState["status"];
+    readonly statusDetail?: string | null;
+    readonly errorMessage?: string | null;
+    readonly completedAt?: string | null;
+  },
+) {
+  if (input.status) {
+    childSession.status = input.status;
+    if (input.status === "inProgress") {
+      childSession.completedAt = null;
+      childSession.errorMessage = null;
+    }
+  }
+  if (input.statusDetail !== undefined) {
+    childSession.statusDetail = input.statusDetail;
+  }
+  if (input.errorMessage !== undefined) {
+    childSession.errorMessage = input.errorMessage;
+  }
+  if (input.completedAt !== undefined) {
+    childSession.completedAt = input.completedAt;
+  }
+}
+
 /**
  * Map a single OpenCode SSE event into zero or more canonical runtime events.
  *
  * This simplified mapper covers the core event types. Unknown event types
  * are silently dropped — they will be mapped in a later phase.
  */
-function mapSseToRuntimeEvents(
+export function mapSseToRuntimeEvents(
   sseEvent: OpenCodeSseEvent,
   threadId: ThreadId,
   sessionState: OpenCodeSessionState,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   const { type: eventType, properties } = sseEvent.payload;
+  const eventScope = resolveOpenCodeEventScope(eventType, properties, sessionState);
 
   const completeActiveTurn = (input?: {
     readonly state?: "completed" | "failed" | "interrupted";
@@ -533,6 +904,17 @@ function mapSseToRuntimeEvents(
   switch (eventType) {
     // ── Session lifecycle ──────────────────────────────────────────
     case "session.created": {
+      const childSessionCreatedEvent = buildOpenCodeChildSessionCreatedEvent(
+        eventType,
+        sseEvent,
+        threadId,
+        sessionState,
+        properties,
+      );
+      if (childSessionCreatedEvent) {
+        return [childSessionCreatedEvent];
+      }
+
       const info = asRecord(properties.info);
       const providerThreadId = asString(info?.id)?.trim();
       const title = asString(info?.title)?.trim();
@@ -560,6 +942,22 @@ function mapSseToRuntimeEvents(
     case "session.updated": {
       const info = asRecord(properties.info);
       const title = asString(info?.title)?.trim();
+      if (eventScope.scope === "child") {
+        if (!title || title === eventScope.childSession.title) {
+          return [];
+        }
+        eventScope.childSession.title = title;
+        return [
+          buildOpenCodeChildSessionLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            eventScope.childSession,
+            "item.updated",
+          ),
+        ].filter((event): event is ProviderRuntimeEvent => event !== null);
+      }
       if (!title) {
         return [];
       }
@@ -578,6 +976,53 @@ function mapSseToRuntimeEvents(
       const status = asRecord(properties.status);
       const statusType = asString(status?.type)?.trim();
       if (!statusType) {
+        return [];
+      }
+
+      if (eventScope.scope === "child") {
+        const detail = asString(status?.message)?.trim() ?? null;
+        if (statusType === "busy" || statusType === "retry") {
+          updateOpenCodeChildSessionStatus(eventScope.childSession, {
+            status: "inProgress",
+            statusDetail: detail,
+            ...(statusType === "retry" ? { completedAt: null } : {}),
+          });
+          return [
+            buildOpenCodeChildSessionLifecycleEvent(
+              eventType,
+              sseEvent,
+              threadId,
+              sessionState,
+              eventScope.childSession,
+              "item.updated",
+            ),
+          ].filter((event): event is ProviderRuntimeEvent => event !== null);
+        }
+
+        if (statusType === "idle") {
+          if (
+            eventScope.childSession.status === "completed" &&
+            eventScope.childSession.completedAt !== null
+          ) {
+            return [];
+          }
+          updateOpenCodeChildSessionStatus(eventScope.childSession, {
+            status: "completed",
+            statusDetail: detail,
+            completedAt: nowIso(),
+          });
+          return [
+            buildOpenCodeChildSessionLifecycleEvent(
+              eventType,
+              sseEvent,
+              threadId,
+              sessionState,
+              eventScope.childSession,
+              "item.completed",
+            ),
+          ].filter((event): event is ProviderRuntimeEvent => event !== null);
+        }
+
         return [];
       }
 
@@ -629,6 +1074,25 @@ function mapSseToRuntimeEvents(
     }
 
     case "session.idle": {
+      if (eventScope.scope === "child") {
+        if (eventScope.childSession.status === "completed" && eventScope.childSession.completedAt) {
+          return [];
+        }
+        updateOpenCodeChildSessionStatus(eventScope.childSession, {
+          status: "completed",
+          completedAt: nowIso(),
+        });
+        return [
+          buildOpenCodeChildSessionLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            eventScope.childSession,
+            "item.completed",
+          ),
+        ].filter((event): event is ProviderRuntimeEvent => event !== null);
+      }
       if (sessionState.lastStatusType === "idle") {
         return [];
       }
@@ -637,6 +1101,31 @@ function mapSseToRuntimeEvents(
 
     case "session.error": {
       const message = getOpenCodeErrorMessage(properties) ?? "OpenCode session error";
+      if (eventScope.scope === "child") {
+        if (
+          eventScope.childSession.status === "failed" &&
+          eventScope.childSession.errorMessage === message &&
+          eventScope.childSession.completedAt
+        ) {
+          return [];
+        }
+        updateOpenCodeChildSessionStatus(eventScope.childSession, {
+          status: "failed",
+          errorMessage: message,
+          statusDetail: message,
+          completedAt: nowIso(),
+        });
+        return [
+          buildOpenCodeChildSessionLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            eventScope.childSession,
+            "item.completed",
+          ),
+        ].filter((event): event is ProviderRuntimeEvent => event !== null);
+      }
       return completeActiveTurn({
         state: "failed",
         errorMessage: message,
@@ -650,6 +1139,33 @@ function mapSseToRuntimeEvents(
       const messageId = asTrimmedString(info?.id);
       if (messageId && role) {
         sessionState.messageRoleById.set(messageId, role);
+      }
+      if (messageId) {
+        const eventSessionId =
+          eventScope.scope === "child"
+            ? eventScope.childSession.childSessionId
+            : (getOpenCodeEventSessionId(eventType, properties) ?? sessionState.sessionId);
+        sessionState.messageSessionIdById.set(messageId, eventSessionId);
+      }
+      if (eventScope.scope === "child") {
+        const title =
+          asString(info?.title)?.trim() ??
+          asString(info?.agent)?.trim() ??
+          asString(info?.name)?.trim();
+        if (!title || title === eventScope.childSession.title) {
+          return [];
+        }
+        eventScope.childSession.title = title;
+        return [
+          buildOpenCodeChildSessionLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            eventScope.childSession,
+            "item.updated",
+          ),
+        ].filter((event): event is ProviderRuntimeEvent => event !== null);
       }
       if (role !== "assistant") {
         return [];
@@ -721,6 +1237,42 @@ function mapSseToRuntimeEvents(
       const messageRole = messageId ? sessionState.messageRoleById.get(messageId) : undefined;
       if (partId && partType) {
         sessionState.partTypes.set(partId, partType);
+      }
+
+      if (eventScope.scope === "child") {
+        if (partId && asString(part?.text) !== undefined) {
+          sessionState.partTextById.set(partId, asString(part?.text) ?? "");
+        }
+
+        if (part && partType === "tool") {
+          const toolEvent = buildOpenCodeToolLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            part,
+            eventScope.childSession,
+          );
+          return toolEvent ? [toolEvent] : [];
+        }
+
+        const partText = asString(part?.text);
+        const streamKind = openCodePartStreamKind(partType);
+        if (!partId || !partText || !streamKind || !messageRole) {
+          return [];
+        }
+
+        updateOpenCodeChildSessionText(eventScope.childSession, messageRole, partText);
+        return [
+          buildOpenCodeChildSessionLifecycleEvent(
+            eventType,
+            sseEvent,
+            threadId,
+            sessionState,
+            eventScope.childSession,
+            "item.updated",
+          ),
+        ].filter((event): event is ProviderRuntimeEvent => event !== null);
       }
 
       if (messageRole !== "assistant") {
@@ -795,7 +1347,9 @@ function mapSseToRuntimeEvents(
       }
 
       if (messageRole !== "assistant") {
-        return [];
+        if (eventScope.scope !== "child") {
+          return [];
+        }
       }
 
       const partType = partId ? sessionState.partTypes.get(partId) : undefined;
@@ -806,7 +1360,21 @@ function mapSseToRuntimeEvents(
 
       if (partId) {
         const previousText = sessionState.partTextById.get(partId) ?? "";
-        sessionState.partTextById.set(partId, `${previousText}${delta}`);
+        const nextText = `${previousText}${delta}`;
+        sessionState.partTextById.set(partId, nextText);
+        if (eventScope.scope === "child" && messageRole) {
+          updateOpenCodeChildSessionText(eventScope.childSession, messageRole, nextText);
+          return [
+            buildOpenCodeChildSessionLifecycleEvent(
+              eventType,
+              sseEvent,
+              threadId,
+              sessionState,
+              eventScope.childSession,
+              "item.updated",
+            ),
+          ].filter((event): event is ProviderRuntimeEvent => event !== null);
+        }
       }
 
       return [
@@ -831,6 +1399,9 @@ function mapSseToRuntimeEvents(
         sessionState.partTypes.delete(partId);
         sessionState.partTextById.delete(partId);
         sessionState.toolFingerprintById.delete(partId);
+      }
+      if (eventScope.scope === "child") {
+        return [];
       }
       return [];
     }
@@ -1039,43 +1610,12 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
       Effect.gen(function* () {
         const services = yield* Effect.services<never>();
         const handler = (sseEvent: OpenCodeSseEvent) => {
-          // Route the event to the correct thread by matching the directory.
-          let targetThreadId: ThreadId | undefined;
-          let targetState: OpenCodeSessionState | undefined;
-          const eventSessionId = getOpenCodeEventSessionId(
-            asRecord(sseEvent.payload.properties) ?? {},
-          );
-
-          if (eventSessionId) {
-            for (const [tid, state] of sessions) {
-              if (state.sessionId === eventSessionId) {
-                targetThreadId = tid as ThreadId;
-                targetState = state;
-                break;
-              }
-            }
+          const target = resolveOpenCodeEventTarget(sseEvent, sessions);
+          if (!target) {
+            return;
           }
 
-          if (!targetThreadId || !targetState) {
-            for (const [tid, state] of sessions) {
-              if (sseEvent.directory === undefined || sseEvent.directory === state.directory) {
-                targetThreadId = tid as ThreadId;
-                targetState = state;
-                break;
-              }
-            }
-          }
-
-          if (!targetThreadId || !targetState) {
-            // If we only have one session, route all events there.
-            if (sessions.size === 1) {
-              const [tid, state] = sessions.entries().next().value!;
-              targetThreadId = tid as ThreadId;
-              targetState = state;
-            } else {
-              return;
-            }
-          }
+          const { threadId: targetThreadId, session: targetState } = target;
 
           const runtimeEvents = mapSseToRuntimeEvents(sseEvent, targetThreadId, targetState);
           if (runtimeEvents.length === 0) return;
@@ -1140,9 +1680,11 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         const sessionState: OpenCodeSessionState = {
           sessionId: session.id,
           directory,
+          childSessionsById: new Map(),
           activeTurnId: null,
           interruptedTurnId: null,
           messageRoleById: new Map(),
+          messageSessionIdById: new Map(),
           pendingQuestionIds: new Map(),
           partTypes: new Map(),
           partTextById: new Map(),
@@ -1208,6 +1750,7 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         state.partTypes.clear();
         state.partTextById.clear();
         state.toolFingerprintById.clear();
+        state.messageSessionIdById.clear();
         state.selectedAgent = openCodeModelOptions?.agent ?? null;
         state.selectedVariant = openCodeModelOptions?.variant ?? null;
         state.selectedModelRef = resolvedModel ?? null;

@@ -1198,6 +1198,65 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(true);
   });
 
+  it("preserves tool lifecycle title status detail and data for completed subagent items", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-completed"),
+      provider: "opencode",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-subagent-1"),
+      itemId: asItemId("subagent:child-1"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "completed",
+        title: "Research helper",
+        detail: "Found the parser bug and linked the fix.",
+        data: {
+          childSessionId: "child-1",
+          parentSessionId: "parent-1",
+          title: "Research helper",
+          status: "completed",
+          inputText: "Inspect the parser regression",
+          outputText: "The tokenizer strips escaped pipes before parsing.",
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-subagent-completed",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-subagent-completed",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.completed");
+    expect(payload).toMatchObject({
+      itemType: "collab_agent_tool_call",
+      title: "Research helper",
+      status: "completed",
+      detail: "Found the parser bug and linked the fix.",
+      data: {
+        childSessionId: "child-1",
+        parentSessionId: "parent-1",
+        title: "Research helper",
+        status: "completed",
+        inputText: "Inspect the parser regression",
+        outputText: "The tokenizer strips escaped pipes before parsing.",
+      },
+    });
+  });
+
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

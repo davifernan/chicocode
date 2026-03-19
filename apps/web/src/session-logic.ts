@@ -43,6 +43,24 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  childSessionId?: string;
+  subagentCard?: SubagentCardSnapshot;
+}
+
+export interface SubagentCardSnapshot {
+  childSessionId: string;
+  parentSessionId?: string;
+  title: string;
+  status: "running" | "completed" | "failed";
+  inputText?: string;
+  outputText?: string;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface SubagentTimelineEntryData extends SubagentCardSnapshot {
+  internals: WorkLogEntry[];
 }
 
 export interface PendingApproval {
@@ -94,6 +112,12 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "subagent";
+      createdAt: string;
+      subagent: SubagentTimelineEntryData;
     };
 
 export function formatDuration(durationMs: number): string {
@@ -493,7 +517,11 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
+    .filter(
+      (activity) =>
+        activity.kind !== "tool.started" ||
+        extractWorkLogItemType(asRecord(activity.payload)) === "collab_agent_tool_call",
+    )
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.summary !== "Checkpoint captured")
     .map((activity) => {
@@ -504,6 +532,8 @@ export function deriveWorkLogEntries(
       const command = extractToolCommand(payload);
       const changedFiles = extractChangedFiles(payload);
       const title = extractToolTitle(payload);
+      const childSessionId = extractChildSessionId(payload);
+      const subagentCard = extractSubagentCardSnapshot(payload, activity.createdAt);
       const entry: WorkLogEntry = {
         id: activity.id,
         createdAt: activity.createdAt,
@@ -532,6 +562,12 @@ export function deriveWorkLogEntries(
       }
       if (requestKind) {
         entry.requestKind = requestKind;
+      }
+      if (childSessionId) {
+        entry.childSessionId = childSessionId;
+      }
+      if (subagentCard) {
+        entry.subagentCard = subagentCard;
       }
       return entry;
     });
@@ -579,6 +615,71 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
 
 function extractToolTitle(payload: Record<string, unknown> | null): string | null {
   return asTrimmedString(payload?.title);
+}
+
+function normalizeSubagentStatus(value: unknown): SubagentCardSnapshot["status"] {
+  switch (value) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
+function extractChildSessionId(payload: Record<string, unknown> | null): string | undefined {
+  const data = asRecord(payload?.data);
+  const explicitChildSessionId = asTrimmedString(data?.childSessionId);
+  if (explicitChildSessionId) {
+    return explicitChildSessionId;
+  }
+  if (extractWorkLogItemType(payload) === "collab_agent_tool_call") {
+    return asTrimmedString(data?.sessionId) ?? undefined;
+  }
+  return undefined;
+}
+
+function extractSubagentCardSnapshot(
+  payload: Record<string, unknown> | null,
+  createdAt: string,
+): SubagentCardSnapshot | undefined {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return undefined;
+  }
+
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const result = asRecord(item?.result);
+  const childSessionId = extractChildSessionId(payload);
+  if (!childSessionId) {
+    return undefined;
+  }
+
+  const title =
+    asTrimmedString(data?.title) ??
+    asTrimmedString(result?.title) ??
+    asTrimmedString(payload?.title) ??
+    "Sub-agent";
+  const parentSessionId = asTrimmedString(data?.parentSessionId);
+  const inputText = asTrimmedString(data?.inputText);
+  const outputText = asTrimmedString(data?.outputText);
+  const errorMessage = asTrimmedString(data?.errorMessage);
+  const startedAt =
+    asTrimmedString(data?.startedAt) ?? asTrimmedString(result?.startedAt) ?? createdAt;
+  const completedAt = asTrimmedString(data?.completedAt) ?? asTrimmedString(result?.completedAt);
+
+  return {
+    childSessionId,
+    ...(parentSessionId ? { parentSessionId } : {}),
+    title,
+    status: normalizeSubagentStatus(payload?.status ?? data?.status ?? result?.status),
+    ...(inputText ? { inputText } : {}),
+    ...(outputText ? { outputText } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    startedAt,
+    ...(completedAt ? { completedAt } : {}),
+  };
 }
 
 function stripTrailingExitCode(value: string): {
@@ -705,6 +806,130 @@ function compareActivitiesByOrder(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+interface SubagentBridgeWindow {
+  childSessionId: string;
+  inputText?: string;
+  outputText?: string;
+  errorMessage?: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+function normalizeBridgeText(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeBridgeLabel(value: string | undefined): string | null {
+  const normalized = normalizeBridgeText(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.replace(/\s+(?:started|complete|completed)\s*$/i, "").trim() || null;
+}
+
+function deriveSubagentBridgeWindows(
+  workEntries: ReadonlyArray<WorkLogEntry>,
+): SubagentBridgeWindow[] {
+  const windowsByChildSessionId = new Map<string, SubagentBridgeWindow>();
+
+  for (let index = 0; index < workEntries.length; index += 1) {
+    const entry = workEntries[index];
+    const snapshot = entry?.subagentCard;
+    if (!snapshot) {
+      continue;
+    }
+
+    const existing = windowsByChildSessionId.get(snapshot.childSessionId);
+    if (existing) {
+      existing.startIndex = Math.min(existing.startIndex, index);
+      existing.endIndex = Math.max(existing.endIndex, index);
+      if (snapshot.inputText) {
+        existing.inputText = snapshot.inputText;
+      }
+      if (snapshot.outputText) {
+        existing.outputText = snapshot.outputText;
+      }
+      if (snapshot.errorMessage) {
+        existing.errorMessage = snapshot.errorMessage;
+      }
+      continue;
+    }
+
+    windowsByChildSessionId.set(snapshot.childSessionId, {
+      childSessionId: snapshot.childSessionId,
+      ...(snapshot.inputText ? { inputText: snapshot.inputText } : {}),
+      ...(snapshot.outputText ? { outputText: snapshot.outputText } : {}),
+      ...(snapshot.errorMessage ? { errorMessage: snapshot.errorMessage } : {}),
+      startIndex: index,
+      endIndex: index,
+    });
+  }
+
+  return [...windowsByChildSessionId.values()];
+}
+
+function isGenericTaskBridgeEntry(entry: WorkLogEntry): boolean {
+  if (entry.command || entry.detail || (entry.changedFiles?.length ?? 0) > 0) {
+    return false;
+  }
+  const label = normalizeBridgeLabel(entry.toolTitle ?? entry.label);
+  return label === "task";
+}
+
+function matchesSubagentInputEcho(entry: WorkLogEntry, window: SubagentBridgeWindow): boolean {
+  const inputText = normalizeBridgeText(window.inputText);
+  if (!inputText) {
+    return false;
+  }
+
+  return [entry.label, entry.detail]
+    .map((value) => normalizeBridgeText(value))
+    .some((value) => value === inputText);
+}
+
+function matchesSubagentResultEcho(entry: WorkLogEntry): boolean {
+  const detailText = normalizeBridgeText([entry.label, entry.detail].filter(Boolean).join(" "));
+  if (!detailText) {
+    return false;
+  }
+  return detailText.includes("task_id:") || detailText.includes("<task_result>");
+}
+
+function shouldSuppressDuplicateSubagentBridgeEntry(
+  entry: WorkLogEntry,
+  index: number,
+  windows: ReadonlyArray<SubagentBridgeWindow>,
+): boolean {
+  if (entry.childSessionId || entry.subagentCard) {
+    return false;
+  }
+
+  for (const window of windows) {
+    const nearStart = index >= window.startIndex - 3 && index <= window.startIndex + 1;
+    const nearEnd = index >= window.endIndex - 1 && index <= window.endIndex + 3;
+
+    if (nearStart && matchesSubagentInputEcho(entry, window)) {
+      return true;
+    }
+    if (nearEnd && matchesSubagentResultEcho(entry)) {
+      return true;
+    }
+    if (
+      isGenericTaskBridgeEntry(entry) &&
+      ((nearStart && Boolean(window.inputText)) ||
+        (nearEnd && Boolean(window.outputText || window.errorMessage)))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function hasToolActivityForTurn(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   turnId: TurnId | null | undefined,
@@ -730,13 +955,98 @@ export function deriveTimelineEntries(
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
+  const subagentByChildSessionId = new Map<
+    string,
+    {
+      id: string;
+      createdAt: string;
+      subagent: SubagentTimelineEntryData;
+    }
+  >();
+  const workRows: TimelineEntry[] = [];
+  const subagentBridgeWindows = deriveSubagentBridgeWindows(workEntries);
+
+  for (let index = 0; index < workEntries.length; index += 1) {
+    const entry = workEntries[index];
+    if (!entry) {
+      continue;
+    }
+    if (shouldSuppressDuplicateSubagentBridgeEntry(entry, index, subagentBridgeWindows)) {
+      continue;
+    }
+
+    const childSessionId = entry.subagentCard?.childSessionId ?? entry.childSessionId;
+    if (!childSessionId) {
+      workRows.push({
+        id: entry.id,
+        kind: "work",
+        createdAt: entry.createdAt,
+        entry,
+      });
+      continue;
+    }
+
+    const existing = subagentByChildSessionId.get(childSessionId);
+    const aggregate =
+      existing ??
+      (() => {
+        const snapshot = entry.subagentCard;
+        const next = {
+          id: `subagent:${childSessionId}`,
+          createdAt: snapshot?.startedAt ?? entry.createdAt,
+          subagent: {
+            childSessionId,
+            title: snapshot?.title ?? entry.toolTitle ?? "Sub-agent",
+            status: snapshot?.status ?? "running",
+            startedAt: snapshot?.startedAt ?? entry.createdAt,
+            ...(snapshot?.parentSessionId ? { parentSessionId: snapshot.parentSessionId } : {}),
+            ...(snapshot?.inputText ? { inputText: snapshot.inputText } : {}),
+            ...(snapshot?.outputText ? { outputText: snapshot.outputText } : {}),
+            ...(snapshot?.errorMessage ? { errorMessage: snapshot.errorMessage } : {}),
+            ...(snapshot?.completedAt ? { completedAt: snapshot.completedAt } : {}),
+            internals: [],
+          } satisfies SubagentTimelineEntryData,
+        };
+        subagentByChildSessionId.set(childSessionId, next);
+        return next;
+      })();
+
+    if (entry.subagentCard) {
+      aggregate.createdAt =
+        aggregate.createdAt.localeCompare(entry.subagentCard.startedAt) <= 0
+          ? aggregate.createdAt
+          : entry.subagentCard.startedAt;
+      aggregate.subagent.title = entry.subagentCard.title;
+      aggregate.subagent.status = entry.subagentCard.status;
+      aggregate.subagent.startedAt = entry.subagentCard.startedAt;
+      if (entry.subagentCard.parentSessionId) {
+        aggregate.subagent.parentSessionId = entry.subagentCard.parentSessionId;
+      }
+      if (entry.subagentCard.inputText) {
+        aggregate.subagent.inputText = entry.subagentCard.inputText;
+      }
+      if (entry.subagentCard.outputText) {
+        aggregate.subagent.outputText = entry.subagentCard.outputText;
+      }
+      if (entry.subagentCard.errorMessage) {
+        aggregate.subagent.errorMessage = entry.subagentCard.errorMessage;
+      }
+      if (entry.subagentCard.completedAt) {
+        aggregate.subagent.completedAt = entry.subagentCard.completedAt;
+      }
+      continue;
+    }
+
+    aggregate.subagent.internals.push(entry);
+  }
+
+  const subagentRows: TimelineEntry[] = [...subagentByChildSessionId.values()].map((entry) => ({
     id: entry.id,
-    kind: "work",
+    kind: "subagent",
     createdAt: entry.createdAt,
-    entry,
+    subagent: entry.subagent,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+  return [...messageRows, ...proposedPlanRows, ...workRows, ...subagentRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }
