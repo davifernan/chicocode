@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## Important: Issues & PRs
+
+- **NEVER** create issues or PRs on the upstream repo (`pingdotgg/t3code`) unless explicitly asked to do so.
+- Always use `davifernan/chicocode` (this fork) for issues, PRs, and discussions.
+
 ## Task Completion Requirements
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
