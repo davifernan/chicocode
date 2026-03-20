@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## Important: Issues & PRs
+
+- **NEVER** create issues or PRs on the upstream repo (`pingdotgg/t3code`) unless explicitly asked to do so.
+- Always use `davifernan/chicocode` (this fork) for issues, PRs, and discussions.
+
 ## CRITICAL: File Safety in Multi-Agent / Multi-Commit Environments
 
 **NEVER overwrite or replace file contents without an explicit instruction to do so.**
