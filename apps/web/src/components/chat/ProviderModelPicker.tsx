@@ -32,21 +32,6 @@ function getProviderHealth(
   return "warn";
 }
 
-function ProviderHealthDot({ health }: { health: "ok" | "warn" | "error" | null }) {
-  if (health === null) return null;
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "ms-auto size-1.5 shrink-0 rounded-full",
-        health === "ok" && "bg-emerald-500",
-        health === "warn" && "bg-amber-400",
-        health === "error" && "bg-destructive",
-      )}
-    />
-  );
-}
-
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
   label: string;
@@ -180,30 +165,16 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             props.compact ? "max-w-36" : undefined,
           )}
         >
-          <span className="relative shrink-0">
-            <ProviderIcon
-              aria-hidden="true"
-              className={cn(
-                "size-4 shrink-0",
-                providerIconClassName(activeProvider, "text-muted-foreground/70"),
-                activeProvider === "claudeAgent" && props.ultrathinkActive
-                  ? "ultrathink-chroma"
-                  : undefined,
-              )}
-            />
-            {(() => {
-              const h = getProviderHealth(statuses, activeProvider);
-              if (h === "error")
-                return (
-                  <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-destructive ring-1 ring-background" />
-                );
-              if (h === "warn")
-                return (
-                  <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-amber-400 ring-1 ring-background" />
-                );
-              return null;
-            })()}
-          </span>
+          <ProviderIcon
+            aria-hidden="true"
+            className={cn(
+              "size-4 shrink-0",
+              providerIconClassName(activeProvider, "text-muted-foreground/70"),
+              activeProvider === "claudeAgent" && props.ultrathinkActive
+                ? "ultrathink-chroma"
+                : undefined,
+            )}
+          />
           <span className="min-w-0 flex-1 truncate">{selectedModelLabel}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
         </span>
@@ -240,8 +211,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         providerIconClassName(option.value, "text-muted-foreground/85"),
                       )}
                     />
-                    {option.label}
-                    <ProviderHealthDot health={getProviderHealth(statuses, option.value)} />
+                    <span
+                      className={cn(
+                        getProviderHealth(statuses, option.value) === "error" && "text-destructive",
+                        getProviderHealth(statuses, option.value) === "warn" && "text-amber-500",
+                      )}
+                    >
+                      {option.label}
+                    </span>
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
                     <MenuGroup>
