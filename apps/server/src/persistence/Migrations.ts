@@ -27,11 +27,13 @@ import Migration0012 from "./Migrations/012_ProjectionThreadsInteractionMode.ts"
 import Migration0013 from "./Migrations/013_ProjectionThreadProposedPlans.ts";
 import Migration0014 from "./Migrations/014_ProjectionThreadProposedPlanImplementation.ts";
 import Migration0015 from "./Migrations/015_ProjectionTurnsSourceProposedPlan.ts";
-import Migration0016 from "./Migrations/016_ProviderBindings.ts";
-import Migration0017 from "./Migrations/017_UiState.ts";
-import Migration0018 from "./Migrations/018_ProviderThreadCatalogMirrorState.ts";
-import Migration0019 from "./Migrations/019_SyncCursors.ts";
-import Migration0020 from "./Migrations/020_DevServerPids.ts";
+// Slots 016-020 are reserved for main branch migrations (ProviderBindings, UiState,
+// ProviderThreadCatalog, SyncCursors, DevServerPids) — they come in via merge.
+// Our OpenCode-specific migrations start at 021 (idempotent — safe for users who ran
+// the old numbering from a previous feat/both-providers checkout).
+import Migration0021 from "./Migrations/021_ProviderBindings.ts";
+import Migration0022 from "./Migrations/022_UiState.ts";
+import Migration0023 from "./Migrations/023_ProviderThreadCatalogMirrorState.ts";
 import { Effect } from "effect";
 
 /**
@@ -60,11 +62,10 @@ const loader = Migrator.fromRecord({
   "13_ProjectionThreadProposedPlans": Migration0013,
   "14_ProjectionThreadProposedPlanImplementation": Migration0014,
   "15_ProjectionTurnsSourceProposedPlan": Migration0015,
-  "16_ProviderBindings": Migration0016,
-  "17_UiState": Migration0017,
-  "18_ProviderThreadCatalogMirrorState": Migration0018,
-  "19_SyncCursors": Migration0019,
-  "20_DevServerPids": Migration0020,
+  // 16-20 come from main via merge
+  "21_ProviderBindings": Migration0021,
+  "22_UiState": Migration0022,
+  "23_ProviderThreadCatalogMirrorState": Migration0023,
 });
 
 /**
@@ -94,16 +95,5 @@ export const runMigrations = Effect.gen(function* () {
  *
  * Use this to ensure migrations run before your application starts.
  * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
  */
 export const MigrationsLive = Layer.effectDiscard(runMigrations);
