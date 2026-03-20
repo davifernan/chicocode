@@ -5214,6 +5214,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               recoveryHint={devServerByProjectId[activeProject.id]?.recoveryHint}
               conflictingPid={devServerByProjectId[activeProject.id]?.conflictingPid}
               serverUrl={devServerByProjectId[activeProject.id]?.url}
+              projectId={activeProject.id}
               packageManager={devServerByProjectId[activeProject.id]?.packageManager}
               projectName={activeProject.name}
               onPopout={() => void handlePopout()}
