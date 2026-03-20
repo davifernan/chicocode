@@ -1,12 +1,61 @@
+import { ThreadId, type OrchestrationSessionStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
+import type { Thread, ThreadSession } from "../types";
+
 import {
+  compareThreadsForSidebarDisplayOrder,
+  compareThreadsForSidebarOrder,
+  getThreadLastActivityTime,
   hasUnseenCompletion,
+  isThreadActivelyWorking,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
+  shouldShowThreadRelativeTime,
 } from "./Sidebar.logic";
+
+function makeSession(
+  status: ThreadSession["status"],
+  orchestrationStatus: OrchestrationSessionStatus,
+): ThreadSession {
+  return {
+    provider: "codex",
+    status,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    orchestrationStatus,
+  };
+}
+
+function makeThread(overrides: Partial<Thread> = {}): Thread {
+  return {
+    id: ThreadId.makeUnsafe("thread-1"),
+    codexThreadId: null,
+    projectId: "project-1" as never,
+    title: "Thread",
+    model: "gpt-5-codex",
+    runtimeMode: "full-access",
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:05:00.000Z",
+    interactionMode: "default",
+    messages: [],
+    messageCount: 0,
+    latestMessageAt: null,
+    messagesHydrated: true,
+    error: null,
+    latestTurn: null,
+    lastVisitedAt: undefined,
+    branch: null,
+    worktreePath: null,
+    turnDiffSummaries: [],
+    activities: [],
+    proposedPlans: [],
+    session: null,
+    ...overrides,
+  };
+}
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -33,6 +82,136 @@ describe("hasUnseenCompletion", () => {
         session: null,
       }),
     ).toBe(true);
+  });
+});
+
+describe("thread recency helpers", () => {
+  it("treats running and connecting threads as actively working", () => {
+    expect(
+      isThreadActivelyWorking(
+        makeThread({
+          session: makeSession("running", "running"),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isThreadActivelyWorking(
+        makeThread({
+          session: makeSession("connecting", "starting"),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isThreadActivelyWorking(
+        makeThread({
+          session: makeSession("ready", "ready"),
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("uses the latest semantic activity timestamp for last activity", () => {
+    expect(
+      getThreadLastActivityTime(
+        makeThread({
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:10:00.000Z",
+          messages: [
+            {
+              id: "message-1" as never,
+              role: "assistant",
+              text: "Done",
+              createdAt: "2026-03-09T10:05:00.000Z",
+              completedAt: "2026-03-09T10:05:00.000Z",
+              streaming: false,
+            },
+          ],
+        }),
+      ),
+    ).toBe(Date.parse("2026-03-09T10:05:00.000Z"));
+  });
+
+  it("falls back to updatedAt when there is no semantic activity yet", () => {
+    expect(
+      getThreadLastActivityTime(
+        makeThread({
+          createdAt: "2026-03-09T10:00:00.000Z",
+          updatedAt: "2026-03-09T10:10:00.000Z",
+        }),
+      ),
+    ).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
+  });
+
+  it("hides relative time labels while a thread is actively working", () => {
+    expect(
+      shouldShowThreadRelativeTime(
+        makeThread({
+          session: makeSession("running", "running"),
+        }),
+      ),
+    ).toBe(false);
+    expect(shouldShowThreadRelativeTime(makeThread())).toBe(true);
+  });
+
+  it("sorts active threads first, then by recent activity", () => {
+    const workingThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-working"),
+      updatedAt: "2026-03-09T10:01:00.000Z",
+      session: makeSession("running", "running"),
+    });
+    const recentIdleThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-idle-recent"),
+      updatedAt: "2026-03-09T10:10:00.000Z",
+    });
+    const olderIdleThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-idle-old"),
+      updatedAt: "2026-03-09T10:03:00.000Z",
+    });
+
+    expect(
+      [recentIdleThread, olderIdleThread, workingThread].toSorted(compareThreadsForSidebarOrder),
+    ).toEqual([workingThread, recentIdleThread, olderIdleThread]);
+  });
+
+  it("keeps starred threads above status threads", () => {
+    const workingThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-working"),
+      session: makeSession("running", "running"),
+    });
+    const doneThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-done"),
+      latestTurn: makeLatestTurn(),
+      lastVisitedAt: "2026-03-09T10:04:00.000Z",
+      session: makeSession("ready", "ready"),
+    });
+    const starredIdleThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-starred"),
+      starred: true,
+      updatedAt: "2026-03-09T10:10:00.000Z",
+    });
+
+    const workingStatus = {
+      label: "Working",
+      colorClass: "",
+      dotClass: "",
+      pulse: true,
+    } as const;
+    const doneStatus = {
+      label: "Done",
+      colorClass: "",
+      dotClass: "",
+      pulse: false,
+    } as const;
+    const sorted = [starredIdleThread, doneThread, workingThread].toSorted((a, b) =>
+      compareThreadsForSidebarDisplayOrder(
+        a,
+        b,
+        a.id === workingThread.id ? workingStatus : a.id === doneThread.id ? doneStatus : null,
+        b.id === workingThread.id ? workingStatus : b.id === doneThread.id ? doneStatus : null,
+      ),
+    );
+
+    expect(sorted).toEqual([starredIdleThread, workingThread, doneThread]);
   });
 });
 
@@ -157,36 +336,7 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
-  it("does not show plan ready after the proposed plan was implemented elsewhere", () => {
-    expect(
-      resolveThreadStatusPill({
-        thread: {
-          ...baseThread,
-          latestTurn: makeLatestTurn(),
-          proposedPlans: [
-            {
-              id: "plan-1" as never,
-              turnId: "turn-1" as never,
-              createdAt: "2026-03-09T10:00:00.000Z",
-              updatedAt: "2026-03-09T10:05:00.000Z",
-              planMarkdown: "# Plan",
-              implementedAt: "2026-03-09T10:06:00.000Z",
-              implementationThreadId: "thread-implement" as never,
-            },
-          ],
-          session: {
-            ...baseThread.session,
-            status: "ready",
-            orchestrationStatus: "ready",
-          },
-        },
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-      }),
-    ).toMatchObject({ label: "Completed", pulse: false });
-  });
-
-  it("shows completed when there is an unseen completion and no active blocker", () => {
+  it("shows done when there is an unseen completion and no active blocker", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
@@ -203,7 +353,7 @@ describe("resolveThreadStatusPill", () => {
         hasPendingApprovals: false,
         hasPendingUserInput: false,
       }),
-    ).toMatchObject({ label: "Completed", pulse: false });
+    ).toMatchObject({ label: "Done", pulse: false });
   });
 });
 

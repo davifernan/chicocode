@@ -738,6 +738,37 @@ describe("composerDraftStore runtime and interaction settings", () => {
   });
 });
 
+describe("composerDraftStore opencode question setting", () => {
+  const threadId = ThreadId.makeUnsafe("thread-opencode-questions");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("stores OpenCode question permission overrides in the draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setOpenCodeAllowQuestions(threadId, false);
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.opencodeAllowQuestions,
+    ).toBe(false);
+  });
+
+  it("removes question-only drafts when reset to default", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setOpenCodeAllowQuestions(threadId, false);
+    store.setOpenCodeAllowQuestions(threadId, null);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // createDebouncedStorage
 // ---------------------------------------------------------------------------

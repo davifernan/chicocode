@@ -170,6 +170,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const activeThreadId = routeThreadId;
   const activeThread = useStore((store) =>

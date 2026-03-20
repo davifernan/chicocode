@@ -47,6 +47,9 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 syncShellEnvironment();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL = "desktop:open-or-focus-dev-logs-popout";
+const OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL = "desktop:open-or-focus-dev-server-preview";
+const UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL = "desktop:update-dev-server-preview-url";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -75,10 +78,14 @@ const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
+const DEV_LOGS_POPOUT_ROUTE = "/dev-logs-popout";
+const DEV_SERVER_PREVIEW_ROUTE = "/dev-server-preview";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+let devLogsPopoutWindow: BrowserWindow | null = null;
+let devServerPreviewWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -150,6 +157,88 @@ function getSafeExternalUrl(rawUrl: unknown): string | null {
   }
 
   return parsedUrl.toString();
+}
+
+/**
+ * Returns true only for URLs using the app's own custom scheme (production builds).
+ * localhost URLs are intentionally NOT treated as internal — they belong to user
+ * dev servers. Dedicated app-owned windows now wrap those URLs via internal
+ * routes, so raw dev-server URLs should still never be treated as internal.
+ */
+function isInternalAppUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === `${DESKTOP_SCHEME}:`;
+  } catch {
+    return false;
+  }
+}
+
+function focusAuxiliaryWindow(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+  window.moveTop();
+}
+
+function buildDesktopRouteUrl(routePath: string, searchParams?: URLSearchParams): string {
+  const hashPath =
+    searchParams && searchParams.size > 0 ? `${routePath}?${searchParams}` : routePath;
+  const viteDevUrl = process.env.VITE_DEV_SERVER_URL;
+  return viteDevUrl
+    ? `${viteDevUrl.replace(/\/$/, "")}/#${hashPath}`
+    : `${DESKTOP_SCHEME}://app/index.html#${hashPath}`;
+}
+
+function buildDevServerPreviewUrl(targetUrl: string): string {
+  const searchParams = new URLSearchParams({ target: targetUrl });
+  return buildDesktopRouteUrl(DEV_SERVER_PREVIEW_ROUTE, searchParams);
+}
+
+function createAuxiliaryWindow(
+  options?: ConstructorParameters<typeof BrowserWindow>[0],
+): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 960,
+    height: 720,
+    minWidth: 480,
+    minHeight: 400,
+    show: false,
+    autoHideMenuBar: true,
+    title: APP_DISPLAY_NAME,
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 18 },
+    ...getIconOption(),
+    ...options,
+    webPreferences: {
+      preload: Path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      ...options?.webPreferences,
+    },
+  });
+
+  // Auxiliary windows (popout, preview) let document.title propagate so
+  // macOS shows "Dev Logs — ProjectName" / "Dev Preview — host" in the
+  // app switcher and window menu. Only the main window forces its own title.
+  window.webContents.on("did-finish-load", () => {
+    emitUpdateState();
+  });
+  window.once("ready-to-show", () => {
+    window.show();
+  });
+
+  return window;
+}
+
+async function loadAuxiliaryWindow(window: BrowserWindow, nextUrl: string): Promise<void> {
+  if (window.isDestroyed()) return;
+  if (window.webContents.getURL() === nextUrl) return;
+  await window.loadURL(nextUrl);
 }
 
 function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
@@ -1168,6 +1257,72 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.removeHandler(OPEN_EXTERNAL_CHANNEL);
+  ipcMain.removeHandler(OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL);
+  ipcMain.handle(OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL, async () => {
+    if (devLogsPopoutWindow && !devLogsPopoutWindow.isDestroyed()) {
+      focusAuxiliaryWindow(devLogsPopoutWindow);
+      return;
+    }
+
+    const popoutWin = createAuxiliaryWindow();
+    devLogsPopoutWindow = popoutWin;
+    popoutWin.on("closed", () => {
+      if (devLogsPopoutWindow === popoutWin) {
+        devLogsPopoutWindow = null;
+      }
+    });
+
+    await loadAuxiliaryWindow(popoutWin, buildDesktopRouteUrl(DEV_LOGS_POPOUT_ROUTE));
+    focusAuxiliaryWindow(popoutWin);
+  });
+
+  ipcMain.removeHandler(OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL);
+  ipcMain.handle(
+    OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL,
+    async (_event, rawTargetUrl: unknown) => {
+      const targetUrl = getSafeExternalUrl(rawTargetUrl);
+      if (!targetUrl) {
+        return;
+      }
+
+      if (devServerPreviewWindow && !devServerPreviewWindow.isDestroyed()) {
+        await loadAuxiliaryWindow(devServerPreviewWindow, buildDevServerPreviewUrl(targetUrl));
+        focusAuxiliaryWindow(devServerPreviewWindow);
+        return;
+      }
+
+      const previewWindow = createAuxiliaryWindow({
+        width: 1280,
+        height: 900,
+        minWidth: 640,
+        minHeight: 480,
+      });
+      devServerPreviewWindow = previewWindow;
+      previewWindow.on("closed", () => {
+        if (devServerPreviewWindow === previewWindow) {
+          devServerPreviewWindow = null;
+        }
+      });
+
+      await loadAuxiliaryWindow(previewWindow, buildDevServerPreviewUrl(targetUrl));
+      focusAuxiliaryWindow(previewWindow);
+    },
+  );
+
+  ipcMain.removeHandler(UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL);
+  ipcMain.handle(UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL, async (_event, rawTargetUrl: unknown) => {
+    if (rawTargetUrl === null) {
+      return;
+    }
+
+    const targetUrl = getSafeExternalUrl(rawTargetUrl);
+    if (!targetUrl || !devServerPreviewWindow || devServerPreviewWindow.isDestroyed()) {
+      return;
+    }
+
+    await loadAuxiliaryWindow(devServerPreviewWindow, buildDevServerPreviewUrl(targetUrl));
+  });
+
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (_event, rawUrl: unknown) => {
     const externalUrl = getSafeExternalUrl(rawUrl);
     if (!externalUrl) {
@@ -1269,6 +1424,30 @@ function createWindow(): BrowserWindow {
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
+    // Internal app URLs (same-origin pages like /dev-logs-popout) must open inside
+    // Electron as a proper BrowserWindow, not in the system browser.
+    if (isInternalAppUrl(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 960,
+          height: 720,
+          minWidth: 480,
+          minHeight: 400,
+          autoHideMenuBar: true,
+          title: APP_DISPLAY_NAME,
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 16, y: 18 },
+          webPreferences: {
+            preload: Path.join(__dirname, "preload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      };
+    }
+
     const externalUrl = getSafeExternalUrl(url);
     if (externalUrl) {
       void shell.openExternal(externalUrl);

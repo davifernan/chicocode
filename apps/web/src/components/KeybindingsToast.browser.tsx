@@ -134,6 +134,12 @@ function resolveWsRpc(tag: string): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.serverGetUiState) {
+    return { valueJson: null };
+  }
+  if (tag === WS_METHODS.serverUpsertUiState) {
+    return undefined;
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,

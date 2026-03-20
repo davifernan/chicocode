@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopBridge } from "@t3tools/contracts";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL = "desktop:open-or-focus-dev-logs-popout";
+const OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL = "desktop:open-or-focus-dev-server-preview";
+const UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL = "desktop:update-dev-server-preview-url";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -11,9 +14,6 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL = "desktop:open-or-focus-dev-logs-popout";
-const OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL = "desktop:open-or-focus-dev-server-preview";
-const UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL = "desktop:update-dev-server-preview-url";
 const wsUrl = process.env.T3CODE_DESKTOP_WS_URL ?? null;
 
 contextBridge.exposeInMainWorld("desktopBridge", {

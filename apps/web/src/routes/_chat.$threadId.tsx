@@ -1,8 +1,12 @@
 import { ThreadId } from "@t3tools/contracts";
-import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect, useState } from "react";
 
-import ChatView from "../components/ChatView";
+import { ChatViewSkeleton } from "../components/ChatViewSkeleton";
+
+// Lazy-load ChatView so the heavy editor/terminal/markdown stack is parsed only on first use.
+// ChatViewSkeleton is shown as fallback — same skeleton used while threads hydrate.
+const ChatView = lazy(() => import("../components/ChatView"));
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -11,20 +15,16 @@ import {
   type DiffPanelMode,
 } from "../components/DiffPanelShell";
 import { useComposerDraftStore } from "../composerDraftStore";
-import {
-  type DiffRouteSearch,
-  parseDiffRouteSearch,
-  stripDiffSearchParams,
-} from "../diffRouteSearch";
+import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useStore } from "../store";
 import { Sheet, SheetPopup } from "../components/ui/sheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
-const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
+const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1080px)";
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
+const DIFF_INLINE_DEFAULT_WIDTH = "clamp(32rem,52vw,56rem)";
 const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 
@@ -46,7 +46,7 @@ const DiffPanelSheet = (props: {
         side="right"
         showCloseButton={false}
         keepMounted
-        className="w-[min(88vw,820px)] max-w-[820px] p-0"
+        className="w-[min(92vw,1040px)] max-w-[1040px] p-0"
       >
         {props.children}
       </SheetPopup>
@@ -212,8 +212,20 @@ function ChatThreadRouteView() {
     }
   }, [navigate, routeThreadExists, threadsHydrated, threadId]);
 
-  if (!threadsHydrated || !routeThreadExists) {
+  // Threads hydrated but this thread genuinely doesn't exist — navigate away (see useEffect above).
+  // Return null briefly; navigation is already in flight.
+  if (threadsHydrated && !routeThreadExists) {
     return null;
+  }
+
+  // Store not yet hydrated — show skeleton layout so the user sees structure immediately
+  // instead of a blank screen.
+  if (!threadsHydrated) {
+    return (
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <ChatViewSkeleton />
+      </SidebarInset>
+    );
   }
 
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
@@ -222,7 +234,9 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+          <Suspense fallback={<ChatViewSkeleton />}>
+            <ChatView key={threadId} threadId={threadId} />
+          </Suspense>
         </SidebarInset>
         <DiffPanelInlineSidebar
           diffOpen={diffOpen}
@@ -237,7 +251,9 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView key={threadId} threadId={threadId} />
+        <Suspense fallback={<ChatViewSkeleton />}>
+          <ChatView key={threadId} threadId={threadId} />
+        </Suspense>
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
@@ -248,8 +264,5 @@ function ChatThreadRouteView() {
 
 export const Route = createFileRoute("/_chat/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
-  search: {
-    middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
-  },
   component: ChatThreadRouteView,
 });

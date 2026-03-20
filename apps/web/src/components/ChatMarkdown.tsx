@@ -6,6 +6,7 @@ import React, {
   isValidElement,
   use,
   useCallback,
+  useDeferredValue,
   memo,
   useEffect,
   useMemo,
@@ -20,9 +21,12 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
+import { cn } from "../lib/utils";
 import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
+
+export type ChatMarkdownVariant = "default" | "opencode";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -49,6 +53,7 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   isStreaming?: boolean;
+  variant?: ChatMarkdownVariant;
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -235,7 +240,11 @@ function SuspenseShikiCodeBlock({
   );
 }
 
-function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
+function ChatMarkdown({ text, cwd, isStreaming = false, variant = "default" }: ChatMarkdownProps) {
+  // Defer markdown re-parsing during streaming so user interactions (typing in composer,
+  // scrolling) stay responsive. React processes them at high priority; markdown re-render
+  // is low-priority and catches up when the main thread is idle.
+  const deferredText = useDeferredValue(text);
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownComponents = useMemo<Components>(
@@ -289,9 +298,14 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   );
 
   return (
-    <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
+    <div
+      className={cn(
+        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80",
+        variant === "opencode" && "chat-markdown--opencode",
+      )}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {text}
+        {deferredText}
       </ReactMarkdown>
     </div>
   );

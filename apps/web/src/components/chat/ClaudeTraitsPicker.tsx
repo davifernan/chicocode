@@ -100,11 +100,11 @@ function ClaudeTraitsMenuContentImpl(props: {
   const setClaudeModelOptions = (nextClaudeModelOptions: ClaudeModelOptions | undefined) => {
     const { claudeAgent: _discardedClaude, ...otherProviderModelOptions } =
       draft.modelOptions ?? {};
-    const nextProviderModelOptions: ProviderModelOptions | undefined = nextClaudeModelOptions
+    const nextProviderModelOptions: ProviderModelOptions = nextClaudeModelOptions
       ? { ...otherProviderModelOptions, claudeAgent: nextClaudeModelOptions }
       : Object.keys(otherProviderModelOptions).length > 0
         ? otherProviderModelOptions
-        : undefined;
+        : {};
     setModelOptions(props.threadId, nextProviderModelOptions);
   };
 

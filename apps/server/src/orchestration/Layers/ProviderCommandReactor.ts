@@ -253,6 +253,15 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModel = options?.model ?? thread.model;
+    // For imported OpenCode threads the externalSessionId IS the OpenCode session id.
+    // Pass it as resumeCursor so OpenCodeAdapter resumes rather than creates a session.
+    const importedSessionResumeCursor: string | undefined =
+      preferredProvider === "opencode" &&
+      thread.source === "imported" &&
+      typeof thread.externalSessionId === "string" &&
+      thread.externalSessionId.length > 0
+        ? thread.externalSessionId
+        : undefined;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: readModel.projects,
@@ -305,6 +314,7 @@ const make = Effect.gen(function* () {
       const providerChanged =
         options?.provider !== undefined && options.provider !== currentProvider;
       const activeSession = yield* resolveActiveSession(existingSessionThreadId);
+      const missingActiveSession = activeSession === undefined;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -318,6 +328,7 @@ const make = Effect.gen(function* () {
         !sameModelOptions(previousModelOptions, options.modelOptions);
 
       if (
+        !missingActiveSession &&
         !runtimeModeChanged &&
         !providerChanged &&
         !shouldRestartForModelChange &&
@@ -327,9 +338,9 @@ const make = Effect.gen(function* () {
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
-          ? undefined
-          : (activeSession?.resumeCursor ?? undefined);
+        missingActiveSession || providerChanged || shouldRestartForModelChange
+          ? importedSessionResumeCursor
+          : (activeSession?.resumeCursor ?? importedSessionResumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
@@ -339,6 +350,7 @@ const make = Effect.gen(function* () {
         desiredRuntimeMode: thread.runtimeMode,
         runtimeModeChanged,
         providerChanged,
+        missingActiveSession,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelOptionsChange,
@@ -359,9 +371,12 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(
-      options?.provider !== undefined ? { provider: options.provider } : undefined,
-    );
+    const startedSession = yield* startProviderSession({
+      ...(options?.provider !== undefined ? { provider: options.provider } : {}),
+      ...(importedSessionResumeCursor !== undefined
+        ? { resumeCursor: importedSessionResumeCursor }
+        : {}),
+    });
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });

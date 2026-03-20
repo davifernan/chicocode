@@ -280,13 +280,12 @@ export const makeOrchestrationIntegrationHarness = (
 
     const runtimeServicesLayer = Layer.mergeAll(
       orchestrationLayer,
-      OrchestrationProjectionSnapshotQueryLive,
       ProjectionCheckpointRepositoryLive,
       ProjectionPendingApprovalRepositoryLive,
       CheckpointStoreLive,
       providerLayer,
       RuntimeReceiptBusLive,
-    );
+    ).pipe(Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive));
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );

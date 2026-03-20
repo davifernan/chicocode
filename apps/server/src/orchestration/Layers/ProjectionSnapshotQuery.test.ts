@@ -257,6 +257,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           model: "gpt-5-codex",
           interactionMode: "default",
           runtimeMode: "full-access",
+          provider: "codex",
+          source: "native",
           branch: null,
           worktreePath: null,
           latestTurn: {
@@ -322,6 +324,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             threadId: ThreadId.makeUnsafe("thread-1"),
             status: "running",
             providerName: "codex",
+            providerSessionId: "provider-session-1",
+            providerThreadId: "provider-thread-1",
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("turn-1"),
             lastError: null,

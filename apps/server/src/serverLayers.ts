@@ -86,6 +86,7 @@ export function makeServerRuntimeServicesLayer() {
   const textGenerationLayer = CodexTextGenerationLive;
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),

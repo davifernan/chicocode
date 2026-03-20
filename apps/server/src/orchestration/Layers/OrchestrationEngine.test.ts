@@ -21,6 +21,7 @@ import {
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -35,13 +36,17 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
 
 async function createOrchestrationSystem() {
+  const persistenceLayer = SqlitePersistenceMemory;
   const orchestrationLayer = OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(persistenceLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(
+      OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provide(persistenceLayer)),
+    ),
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -317,14 +322,18 @@ describe("OrchestrationEngine", () => {
       },
     };
 
+    const persistenceLayer = SqlitePersistenceMemory;
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionPipelineLive),
         Layer.provide(Layer.succeed(OrchestrationEventStore, flakyStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(persistenceLayer),
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
         Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(
+          OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provide(persistenceLayer)),
+        ),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -403,12 +412,16 @@ describe("OrchestrationEngine", () => {
       },
     };
 
+    const persistenceLayer = SqlitePersistenceMemory;
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(persistenceLayer),
+        Layer.provideMerge(
+          OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provide(persistenceLayer)),
+        ),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -538,12 +551,16 @@ describe("OrchestrationEngine", () => {
       },
     };
 
+    const persistenceLayer = SqlitePersistenceMemory;
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(persistenceLayer),
+        Layer.provideMerge(
+          OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provide(persistenceLayer)),
+        ),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

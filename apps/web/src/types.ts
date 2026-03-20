@@ -3,6 +3,7 @@ import type {
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
+  ThreadProviderMetadata as ContractThreadProviderMetadata,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -12,6 +13,7 @@ import type {
   ProviderKind,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadSource,
 } from "@t3tools/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
@@ -22,6 +24,7 @@ export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "default";
 export const MAX_TERMINALS_PER_GROUP = 4;
 export type ProjectScript = ContractProjectScript;
+export type ThreadProviderMetadata = ContractThreadProviderMetadata;
 
 export interface ThreadTerminalGroup {
   id: string;
@@ -94,6 +97,10 @@ export interface Thread {
   model: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  provider?: ProviderKind | undefined;
+  source?: ThreadSource | undefined;
+  externalSessionId?: string | undefined;
+  providerMetadata?: ThreadProviderMetadata | undefined;
   session: ThreadSession | null;
   messages: ChatMessage[];
   messageCount: number;

@@ -1,4 +1,4 @@
-import type { ThreadId } from "@t3tools/contracts";
+import type { ProviderKind, ThreadId } from "@t3tools/contracts";
 import { FolderIcon, GitForkIcon } from "lucide-react";
 import { useCallback } from "react";
 
@@ -21,6 +21,7 @@ const envModeItems = [
 
 interface BranchToolbarProps {
   threadId: ThreadId;
+  provider: ProviderKind;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
@@ -29,6 +30,7 @@ interface BranchToolbarProps {
 
 export default function BranchToolbar({
   threadId,
+  provider,
   onEnvModeChange,
   envLocked,
   onCheckoutPullRequestRequest,
@@ -109,51 +111,56 @@ export default function BranchToolbar({
   if (!activeThreadId || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 pb-3 pt-1">
-      {envLocked || activeWorktreePath ? (
-        <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
-          {activeWorktreePath ? (
-            <>
-              <GitForkIcon className="size-3" />
-              Worktree
-            </>
-          ) : (
-            <>
-              <FolderIcon className="size-3" />
-              Local
-            </>
-          )}
+    <div className="mx-auto flex w-full max-w-[var(--chat-content-max-width)] items-center justify-between px-5 pb-3 pt-1">
+      <div className="flex items-center gap-2">
+        <span className="rounded-[4px] border border-border/50 bg-background/70 px-1 py-0.5 font-medium text-[8px] leading-none tracking-[0.12em] text-muted-foreground/60 uppercase">
+          {provider === "opencode" ? "OpenCode" : "Codex"}
         </span>
-      ) : (
-        <Select
-          value={effectiveEnvMode}
-          onValueChange={(value) => onEnvModeChange(value as EnvMode)}
-          items={envModeItems}
-        >
-          <SelectTrigger variant="ghost" size="xs" className="font-medium">
-            {effectiveEnvMode === "worktree" ? (
-              <GitForkIcon className="size-3" />
+        {envLocked || activeWorktreePath ? (
+          <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
+            {activeWorktreePath ? (
+              <>
+                <GitForkIcon className="size-3" />
+                Worktree
+              </>
             ) : (
-              <FolderIcon className="size-3" />
-            )}
-            <SelectValue />
-          </SelectTrigger>
-          <SelectPopup>
-            <SelectItem value="local">
-              <span className="inline-flex items-center gap-1.5">
+              <>
                 <FolderIcon className="size-3" />
                 Local
-              </span>
-            </SelectItem>
-            <SelectItem value="worktree">
-              <span className="inline-flex items-center gap-1.5">
+              </>
+            )}
+          </span>
+        ) : (
+          <Select
+            value={effectiveEnvMode}
+            onValueChange={(value) => onEnvModeChange(value as EnvMode)}
+            items={envModeItems}
+          >
+            <SelectTrigger variant="ghost" size="xs" className="font-medium">
+              {effectiveEnvMode === "worktree" ? (
                 <GitForkIcon className="size-3" />
-                New worktree
-              </span>
-            </SelectItem>
-          </SelectPopup>
-        </Select>
-      )}
+              ) : (
+                <FolderIcon className="size-3" />
+              )}
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="local">
+                <span className="inline-flex items-center gap-1.5">
+                  <FolderIcon className="size-3" />
+                  Local
+                </span>
+              </SelectItem>
+              <SelectItem value="worktree">
+                <span className="inline-flex items-center gap-1.5">
+                  <GitForkIcon className="size-3" />
+                  New worktree
+                </span>
+              </SelectItem>
+            </SelectPopup>
+          </Select>
+        )}
+      </div>
 
       <BranchToolbarBranchSelector
         activeProjectCwd={activeProject.cwd}

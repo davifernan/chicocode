@@ -4,10 +4,10 @@ import {
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
+  type MessageId,
   type ProviderKind,
   type ToolLifecycleItemType,
   type UserInputQuestion,
-  type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 
@@ -15,12 +15,11 @@ import type {
   ChatMessage,
   ProposedPlan,
   SessionPhase,
-  Thread,
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
 
-export type ProviderPickerKind = ProviderKind | "cursor";
+export type ProviderPickerKind = ProviderKind | "claudeCode" | "cursor";
 
 export const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
@@ -30,6 +29,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "codex", label: "Codex", available: true },
   { value: "opencode", label: "OpenCode", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
+  { value: "claudeCode", label: "Claude Code", available: false },
   { value: "cursor", label: "Cursor", available: false },
 ];
 
@@ -44,6 +44,8 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  childSessionId?: string;
+  subagentCard?: SubagentCardSnapshot;
 }
 
 export interface SubagentCardSnapshot {
@@ -60,11 +62,6 @@ export interface SubagentCardSnapshot {
 
 export interface SubagentTimelineEntryData extends SubagentCardSnapshot {
   internals: WorkLogEntry[];
-}
-
-interface DerivedWorkLogEntry extends WorkLogEntry {
-  activityKind: OrchestrationThreadActivity["kind"];
-  collapseKey?: string;
 }
 
 export interface PendingApproval {
@@ -96,8 +93,6 @@ export interface LatestProposedPlanState {
   updatedAt: string;
   turnId: TurnId | null;
   planMarkdown: string;
-  implementedAt: string | null;
-  implementationThreadId: ThreadId | null;
 }
 
 export type TimelineEntry =
@@ -118,6 +113,12 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "subagent";
+      createdAt: string;
+      subagent: SubagentTimelineEntryData;
     };
 
 export function formatDuration(durationMs: number): string {
@@ -142,8 +143,22 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
   return formatDuration(endedAt - startedAt);
 }
 
-type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
+type LatestTurnTiming = Pick<
+  OrchestrationLatestTurn,
+  "turnId" | "requestedAt" | "startedAt" | "completedAt"
+> & {
+  assistantMessageId?: OrchestrationLatestTurn["assistantMessageId"];
+};
 type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
+
+function isLatestTurnActive(
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): boolean {
+  if (!latestTurn?.turnId) return false;
+  if (session?.orchestrationStatus !== "running") return false;
+  return session.activeTurnId === latestTurn.turnId;
+}
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
@@ -152,8 +167,10 @@ export function isLatestTurnSettled(
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
   if (!session) return true;
-  if (session.orchestrationStatus === "running") return false;
-  return true;
+  if (session.orchestrationStatus !== "running") return true;
+  if (!session.activeTurnId) return false;
+  if (session.activeTurnId !== latestTurn.turnId) return true;
+  return false;
 }
 
 export function deriveActiveWorkStartedAt(
@@ -161,10 +178,75 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
+  const activeLatestTurn = isLatestTurnActive(latestTurn, session) ? latestTurn : null;
+  if (activeLatestTurn) {
+    return activeLatestTurn.startedAt ?? activeLatestTurn.requestedAt ?? sendStartedAt;
   }
   return sendStartedAt;
+}
+
+export function deriveCompletedTurnSummaryByAssistantMessageId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>,
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): Map<MessageId, string> {
+  const orderedActivities = [...activities].toSorted(compareActivitiesByOrder);
+  const startedAtByTurnId = new Map<TurnId, string>();
+  const fallbackStartedAtByTurnId = new Map<TurnId, string>();
+  const completedAtByTurnId = new Map<TurnId, string>();
+  const assistantMessageIdByTurnId = new Map<TurnId, MessageId>();
+  const hasToolActivityByTurnId = new Map<TurnId, boolean>();
+
+  for (const activity of orderedActivities) {
+    if (!activity.turnId) continue;
+
+    if (!fallbackStartedAtByTurnId.has(activity.turnId)) {
+      fallbackStartedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.kind === "turn.started" && !startedAtByTurnId.has(activity.turnId)) {
+      startedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.kind === "turn.completed") {
+      completedAtByTurnId.set(activity.turnId, activity.createdAt);
+    }
+    if (activity.tone === "tool") {
+      hasToolActivityByTurnId.set(activity.turnId, true);
+    }
+  }
+
+  for (const summary of turnDiffSummaries) {
+    completedAtByTurnId.set(summary.turnId, summary.completedAt);
+    if (summary.assistantMessageId) {
+      assistantMessageIdByTurnId.set(summary.turnId, summary.assistantMessageId);
+    }
+  }
+
+  if (latestTurn?.assistantMessageId && isLatestTurnSettled(latestTurn, session)) {
+    assistantMessageIdByTurnId.set(latestTurn.turnId, latestTurn.assistantMessageId);
+    if (latestTurn.completedAt) {
+      completedAtByTurnId.set(latestTurn.turnId, latestTurn.completedAt);
+    }
+  }
+
+  const result = new Map<MessageId, string>();
+  for (const [turnId, assistantMessageId] of assistantMessageIdByTurnId) {
+    if (!hasToolActivityByTurnId.get(turnId)) {
+      continue;
+    }
+    const startedAt = startedAtByTurnId.get(turnId) ?? fallbackStartedAtByTurnId.get(turnId);
+    const completedAt = completedAtByTurnId.get(turnId);
+    if (!startedAt || !completedAt) {
+      continue;
+    }
+    const elapsed = formatElapsed(startedAt, completedAt);
+    if (!elapsed) {
+      continue;
+    }
+    result.set(assistantMessageId, `Worked for ${elapsed}`);
+  }
+
+  return result;
 }
 
 function requestKindFromRequestType(requestType: unknown): PendingApproval["requestKind"] | null {
@@ -180,20 +262,6 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
     default:
       return null;
   }
-}
-
-function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
-  const normalized = detail?.toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.includes("stale pending approval request") ||
-    normalized.includes("stale pending user-input request") ||
-    normalized.includes("unknown pending approval request") ||
-    normalized.includes("unknown pending permission request") ||
-    normalized.includes("unknown pending user-input request")
-  );
 }
 
 export function derivePendingApprovals(
@@ -240,7 +308,7 @@ export function derivePendingApprovals(
     if (
       activity.kind === "provider.approval.respond.failed" &&
       requestId &&
-      isStalePendingRequestFailureDetail(detail)
+      detail?.includes("Unknown pending permission request")
     ) {
       openByRequestId.delete(requestId);
       continue;
@@ -316,7 +384,6 @@ export function derivePendingUserInputs(
       payload && typeof payload.requestId === "string"
         ? ApprovalRequestId.makeUnsafe(payload.requestId)
         : null;
-    const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
 
     if (activity.kind === "user-input.requested" && requestId) {
       const questions = parseUserInputQuestions(payload);
@@ -332,15 +399,6 @@ export function derivePendingUserInputs(
     }
 
     if (activity.kind === "user-input.resolved" && requestId) {
-      openByRequestId.delete(requestId);
-      continue;
-    }
-
-    if (
-      activity.kind === "provider.user-input.respond.failed" &&
-      requestId &&
-      isStalePendingRequestFailureDetail(detail)
-    ) {
       openByRequestId.delete(requestId);
     }
   }
@@ -424,7 +482,13 @@ export function findLatestProposedPlan(
       )
       .at(-1);
     if (matchingTurnPlan) {
-      return toLatestProposedPlanState(matchingTurnPlan);
+      return {
+        id: matchingTurnPlan.id,
+        createdAt: matchingTurnPlan.createdAt,
+        updatedAt: matchingTurnPlan.updatedAt,
+        turnId: matchingTurnPlan.turnId,
+        planMarkdown: matchingTurnPlan.planMarkdown,
+      };
     }
   }
 
@@ -438,37 +502,17 @@ export function findLatestProposedPlan(
     return null;
   }
 
-  return toLatestProposedPlanState(latestPlan);
+  return {
+    id: latestPlan.id,
+    createdAt: latestPlan.createdAt,
+    updatedAt: latestPlan.updatedAt,
+    turnId: latestPlan.turnId,
+    planMarkdown: latestPlan.planMarkdown,
+  };
 }
 
-export function findSidebarProposedPlan(input: {
-  threads: ReadonlyArray<Pick<Thread, "id" | "proposedPlans">>;
-  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "sourceProposedPlan"> | null;
-  latestTurnSettled: boolean;
-  threadId: ThreadId | string | null | undefined;
-}): LatestProposedPlanState | null {
-  const activeThreadPlans =
-    input.threads.find((thread) => thread.id === input.threadId)?.proposedPlans ?? [];
-
-  if (!input.latestTurnSettled) {
-    const sourceProposedPlan = input.latestTurn?.sourceProposedPlan;
-    if (sourceProposedPlan) {
-      const sourcePlan = input.threads
-        .find((thread) => thread.id === sourceProposedPlan.threadId)
-        ?.proposedPlans.find((plan) => plan.id === sourceProposedPlan.planId);
-      if (sourcePlan) {
-        return toLatestProposedPlanState(sourcePlan);
-      }
-    }
-  }
-
-  return findLatestProposedPlan(activeThreadPlans, input.latestTurn?.turnId ?? null);
-}
-
-export function hasActionableProposedPlan(
-  proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
-): boolean {
-  return proposedPlan !== null && proposedPlan.implementedAt === null;
+export function hasActionableProposedPlan(plan: LatestProposedPlanState | null): boolean {
+  return plan != null;
 }
 
 export function deriveWorkLogEntries(
@@ -476,168 +520,62 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const entries = ordered
+  return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter((activity) => activity.kind !== "tool.started")
+    .filter(
+      (activity) =>
+        activity.kind !== "tool.started" ||
+        extractWorkLogItemType(asRecord(activity.payload)) === "collab_agent_tool_call",
+    )
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.summary !== "Checkpoint captured")
-    .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .map(toDerivedWorkLogEntry);
-  return collapseDerivedWorkLogEntries(entries).map(
-    ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
-  );
-}
-
-function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") {
-    return false;
-  }
-
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
-}
-
-function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  const command = extractToolCommand(payload);
-  const changedFiles = extractChangedFiles(payload);
-  const title = extractToolTitle(payload);
-  const entry: DerivedWorkLogEntry = {
-    id: activity.id,
-    createdAt: activity.createdAt,
-    label: activity.summary,
-    tone: activity.tone === "approval" ? "info" : activity.tone,
-    activityKind: activity.kind,
-  };
-  const itemType = extractWorkLogItemType(payload);
-  const requestKind = extractWorkLogRequestKind(payload);
-  if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
-    const detail = stripTrailingExitCode(payload.detail).output;
-    if (detail) {
-      entry.detail = detail;
-    }
-  }
-  if (command) {
-    entry.command = command;
-  }
-  if (changedFiles.length > 0) {
-    entry.changedFiles = changedFiles;
-  }
-  if (title) {
-    entry.toolTitle = title;
-  }
-  if (itemType) {
-    entry.itemType = itemType;
-  }
-  if (requestKind) {
-    entry.requestKind = requestKind;
-  }
-  const collapseKey = deriveToolLifecycleCollapseKey(entry);
-  if (collapseKey) {
-    entry.collapseKey = collapseKey;
-  }
-  return entry;
-}
-
-function collapseDerivedWorkLogEntries(
-  entries: ReadonlyArray<DerivedWorkLogEntry>,
-): DerivedWorkLogEntry[] {
-  const collapsed: DerivedWorkLogEntry[] = [];
-  for (const entry of entries) {
-    const previous = collapsed.at(-1);
-    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
-      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
-      continue;
-    }
-    collapsed.push(entry);
-  }
-  return collapsed;
-}
-
-function shouldCollapseToolLifecycleEntries(
-  previous: DerivedWorkLogEntry,
-  next: DerivedWorkLogEntry,
-): boolean {
-  if (previous.activityKind !== "tool.updated" && previous.activityKind !== "tool.completed") {
-    return false;
-  }
-  if (next.activityKind !== "tool.updated" && next.activityKind !== "tool.completed") {
-    return false;
-  }
-  if (previous.activityKind === "tool.completed") {
-    return false;
-  }
-  return previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey;
-}
-
-function mergeDerivedWorkLogEntries(
-  previous: DerivedWorkLogEntry,
-  next: DerivedWorkLogEntry,
-): DerivedWorkLogEntry {
-  const changedFiles = mergeChangedFiles(previous.changedFiles, next.changedFiles);
-  const detail = next.detail ?? previous.detail;
-  const command = next.command ?? previous.command;
-  const toolTitle = next.toolTitle ?? previous.toolTitle;
-  const itemType = next.itemType ?? previous.itemType;
-  const requestKind = next.requestKind ?? previous.requestKind;
-  const collapseKey = next.collapseKey ?? previous.collapseKey;
-  return {
-    ...previous,
-    ...next,
-    ...(detail ? { detail } : {}),
-    ...(command ? { command } : {}),
-    ...(changedFiles.length > 0 ? { changedFiles } : {}),
-    ...(toolTitle ? { toolTitle } : {}),
-    ...(itemType ? { itemType } : {}),
-    ...(requestKind ? { requestKind } : {}),
-    ...(collapseKey ? { collapseKey } : {}),
-  };
-}
-
-function mergeChangedFiles(
-  previous: ReadonlyArray<string> | undefined,
-  next: ReadonlyArray<string> | undefined,
-): string[] {
-  const merged = [...(previous ?? []), ...(next ?? [])];
-  if (merged.length === 0) {
-    return [];
-  }
-  return [...new Set(merged)];
-}
-
-function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
-  if (entry.activityKind !== "tool.updated" && entry.activityKind !== "tool.completed") {
-    return undefined;
-  }
-  const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
-  const detail = entry.detail?.trim() ?? "";
-  const itemType = entry.itemType ?? "";
-  if (normalizedLabel.length === 0 && detail.length === 0 && itemType.length === 0) {
-    return undefined;
-  }
-  return [itemType, normalizedLabel, detail].join("\u001f");
-}
-
-function normalizeCompactToolLabel(value: string): string {
-  return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
-}
-
-function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {
-  return {
-    id: proposedPlan.id,
-    createdAt: proposedPlan.createdAt,
-    updatedAt: proposedPlan.updatedAt,
-    turnId: proposedPlan.turnId,
-    planMarkdown: proposedPlan.planMarkdown,
-    implementedAt: proposedPlan.implementedAt,
-    implementationThreadId: proposedPlan.implementationThreadId,
-  };
+    .map((activity) => {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : null;
+      const command = extractToolCommand(payload);
+      const changedFiles = extractChangedFiles(payload);
+      const title = extractToolTitle(payload);
+      const childSessionId = extractChildSessionId(payload);
+      const subagentCard = extractSubagentCardSnapshot(payload, activity.createdAt);
+      const entry: WorkLogEntry = {
+        id: activity.id,
+        createdAt: activity.createdAt,
+        label: activity.summary,
+        tone: activity.tone === "approval" ? "info" : activity.tone,
+      };
+      const itemType = extractWorkLogItemType(payload);
+      const requestKind = extractWorkLogRequestKind(payload);
+      if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
+        const detail = stripTrailingExitCode(payload.detail).output;
+        if (detail) {
+          entry.detail = detail;
+        }
+      }
+      if (command) {
+        entry.command = command;
+      }
+      if (changedFiles.length > 0) {
+        entry.changedFiles = changedFiles;
+      }
+      if (title) {
+        entry.toolTitle = title;
+      }
+      if (itemType) {
+        entry.itemType = itemType;
+      }
+      if (requestKind) {
+        entry.requestKind = requestKind;
+      }
+      if (childSessionId) {
+        entry.childSessionId = childSessionId;
+      }
+      if (subagentCard) {
+        entry.subagentCard = subagentCard;
+      }
+      return entry;
+    });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -682,6 +620,71 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
 
 function extractToolTitle(payload: Record<string, unknown> | null): string | null {
   return asTrimmedString(payload?.title);
+}
+
+function normalizeSubagentStatus(value: unknown): SubagentCardSnapshot["status"] {
+  switch (value) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
+function extractChildSessionId(payload: Record<string, unknown> | null): string | undefined {
+  const data = asRecord(payload?.data);
+  const explicitChildSessionId = asTrimmedString(data?.childSessionId);
+  if (explicitChildSessionId) {
+    return explicitChildSessionId;
+  }
+  if (extractWorkLogItemType(payload) === "collab_agent_tool_call") {
+    return asTrimmedString(data?.sessionId) ?? undefined;
+  }
+  return undefined;
+}
+
+function extractSubagentCardSnapshot(
+  payload: Record<string, unknown> | null,
+  createdAt: string,
+): SubagentCardSnapshot | undefined {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return undefined;
+  }
+
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const result = asRecord(item?.result);
+  const childSessionId = extractChildSessionId(payload);
+  if (!childSessionId) {
+    return undefined;
+  }
+
+  const title =
+    asTrimmedString(data?.title) ??
+    asTrimmedString(result?.title) ??
+    asTrimmedString(payload?.title) ??
+    "Sub-agent";
+  const parentSessionId = asTrimmedString(data?.parentSessionId);
+  const inputText = asTrimmedString(data?.inputText);
+  const outputText = asTrimmedString(data?.outputText);
+  const errorMessage = asTrimmedString(data?.errorMessage);
+  const startedAt =
+    asTrimmedString(data?.startedAt) ?? asTrimmedString(result?.startedAt) ?? createdAt;
+  const completedAt = asTrimmedString(data?.completedAt) ?? asTrimmedString(result?.completedAt);
+
+  return {
+    childSessionId,
+    ...(parentSessionId ? { parentSessionId } : {}),
+    title,
+    status: normalizeSubagentStatus(payload?.status ?? data?.status ?? result?.status),
+    ...(inputText ? { inputText } : {}),
+    ...(outputText ? { outputText } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    startedAt,
+    ...(completedAt ? { completedAt } : {}),
+  };
 }
 
 function stripTrailingExitCode(value: string): {
@@ -805,31 +808,131 @@ function compareActivitiesByOrder(
     return -1;
   }
 
-  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
-  if (createdAtComparison !== 0) {
-    return createdAtComparison;
-  }
-
-  const lifecycleRankComparison =
-    compareActivityLifecycleRank(left.kind) - compareActivityLifecycleRank(right.kind);
-  if (lifecycleRankComparison !== 0) {
-    return lifecycleRankComparison;
-  }
-
-  return left.id.localeCompare(right.id);
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
-function compareActivityLifecycleRank(kind: string): number {
-  if (kind.endsWith(".started") || kind === "tool.started") {
-    return 0;
+interface SubagentBridgeWindow {
+  childSessionId: string;
+  inputText?: string;
+  outputText?: string;
+  errorMessage?: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+function normalizeBridgeText(value: string | undefined): string | null {
+  if (!value) {
+    return null;
   }
-  if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
-    return 1;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeBridgeLabel(value: string | undefined): string | null {
+  const normalized = normalizeBridgeText(value);
+  if (!normalized) {
+    return null;
   }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
-    return 2;
+  return normalized.replace(/\s+(?:started|complete|completed)\s*$/i, "").trim() || null;
+}
+
+function deriveSubagentBridgeWindows(
+  workEntries: ReadonlyArray<WorkLogEntry>,
+): SubagentBridgeWindow[] {
+  const windowsByChildSessionId = new Map<string, SubagentBridgeWindow>();
+
+  for (let index = 0; index < workEntries.length; index += 1) {
+    const entry = workEntries[index];
+    const snapshot = entry?.subagentCard;
+    if (!snapshot) {
+      continue;
+    }
+
+    const existing = windowsByChildSessionId.get(snapshot.childSessionId);
+    if (existing) {
+      existing.startIndex = Math.min(existing.startIndex, index);
+      existing.endIndex = Math.max(existing.endIndex, index);
+      if (snapshot.inputText) {
+        existing.inputText = snapshot.inputText;
+      }
+      if (snapshot.outputText) {
+        existing.outputText = snapshot.outputText;
+      }
+      if (snapshot.errorMessage) {
+        existing.errorMessage = snapshot.errorMessage;
+      }
+      continue;
+    }
+
+    windowsByChildSessionId.set(snapshot.childSessionId, {
+      childSessionId: snapshot.childSessionId,
+      ...(snapshot.inputText ? { inputText: snapshot.inputText } : {}),
+      ...(snapshot.outputText ? { outputText: snapshot.outputText } : {}),
+      ...(snapshot.errorMessage ? { errorMessage: snapshot.errorMessage } : {}),
+      startIndex: index,
+      endIndex: index,
+    });
   }
-  return 1;
+
+  return [...windowsByChildSessionId.values()];
+}
+
+function isGenericTaskBridgeEntry(entry: WorkLogEntry): boolean {
+  if (entry.command || entry.detail || (entry.changedFiles?.length ?? 0) > 0) {
+    return false;
+  }
+  const label = normalizeBridgeLabel(entry.toolTitle ?? entry.label);
+  return label === "task";
+}
+
+function matchesSubagentInputEcho(entry: WorkLogEntry, window: SubagentBridgeWindow): boolean {
+  const inputText = normalizeBridgeText(window.inputText);
+  if (!inputText) {
+    return false;
+  }
+
+  return [entry.label, entry.detail]
+    .map((value) => normalizeBridgeText(value))
+    .some((value) => value === inputText);
+}
+
+function matchesSubagentResultEcho(entry: WorkLogEntry): boolean {
+  const detailText = normalizeBridgeText([entry.label, entry.detail].filter(Boolean).join(" "));
+  if (!detailText) {
+    return false;
+  }
+  return detailText.includes("task_id:") || detailText.includes("<task_result>");
+}
+
+function shouldSuppressDuplicateSubagentBridgeEntry(
+  entry: WorkLogEntry,
+  index: number,
+  windows: ReadonlyArray<SubagentBridgeWindow>,
+): boolean {
+  if (entry.childSessionId || entry.subagentCard) {
+    return false;
+  }
+
+  for (const window of windows) {
+    const nearStart = index >= window.startIndex - 3 && index <= window.startIndex + 1;
+    const nearEnd = index >= window.endIndex - 1 && index <= window.endIndex + 3;
+
+    if (nearStart && matchesSubagentInputEcho(entry, window)) {
+      return true;
+    }
+    if (nearEnd && matchesSubagentResultEcho(entry)) {
+      return true;
+    }
+    if (
+      isGenericTaskBridgeEntry(entry) &&
+      ((nearStart && Boolean(window.inputText)) ||
+        (nearEnd && Boolean(window.outputText || window.errorMessage)))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function hasToolActivityForTurn(
@@ -857,13 +960,98 @@ export function deriveTimelineEntries(
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
+  const subagentByChildSessionId = new Map<
+    string,
+    {
+      id: string;
+      createdAt: string;
+      subagent: SubagentTimelineEntryData;
+    }
+  >();
+  const workRows: TimelineEntry[] = [];
+  const subagentBridgeWindows = deriveSubagentBridgeWindows(workEntries);
+
+  for (let index = 0; index < workEntries.length; index += 1) {
+    const entry = workEntries[index];
+    if (!entry) {
+      continue;
+    }
+    if (shouldSuppressDuplicateSubagentBridgeEntry(entry, index, subagentBridgeWindows)) {
+      continue;
+    }
+
+    const childSessionId = entry.subagentCard?.childSessionId ?? entry.childSessionId;
+    if (!childSessionId) {
+      workRows.push({
+        id: entry.id,
+        kind: "work",
+        createdAt: entry.createdAt,
+        entry,
+      });
+      continue;
+    }
+
+    const existing = subagentByChildSessionId.get(childSessionId);
+    const aggregate =
+      existing ??
+      (() => {
+        const snapshot = entry.subagentCard;
+        const next = {
+          id: `subagent:${childSessionId}`,
+          createdAt: snapshot?.startedAt ?? entry.createdAt,
+          subagent: {
+            childSessionId,
+            title: snapshot?.title ?? entry.toolTitle ?? "Sub-agent",
+            status: snapshot?.status ?? "running",
+            startedAt: snapshot?.startedAt ?? entry.createdAt,
+            ...(snapshot?.parentSessionId ? { parentSessionId: snapshot.parentSessionId } : {}),
+            ...(snapshot?.inputText ? { inputText: snapshot.inputText } : {}),
+            ...(snapshot?.outputText ? { outputText: snapshot.outputText } : {}),
+            ...(snapshot?.errorMessage ? { errorMessage: snapshot.errorMessage } : {}),
+            ...(snapshot?.completedAt ? { completedAt: snapshot.completedAt } : {}),
+            internals: [],
+          } satisfies SubagentTimelineEntryData,
+        };
+        subagentByChildSessionId.set(childSessionId, next);
+        return next;
+      })();
+
+    if (entry.subagentCard) {
+      aggregate.createdAt =
+        aggregate.createdAt.localeCompare(entry.subagentCard.startedAt) <= 0
+          ? aggregate.createdAt
+          : entry.subagentCard.startedAt;
+      aggregate.subagent.title = entry.subagentCard.title;
+      aggregate.subagent.status = entry.subagentCard.status;
+      aggregate.subagent.startedAt = entry.subagentCard.startedAt;
+      if (entry.subagentCard.parentSessionId) {
+        aggregate.subagent.parentSessionId = entry.subagentCard.parentSessionId;
+      }
+      if (entry.subagentCard.inputText) {
+        aggregate.subagent.inputText = entry.subagentCard.inputText;
+      }
+      if (entry.subagentCard.outputText) {
+        aggregate.subagent.outputText = entry.subagentCard.outputText;
+      }
+      if (entry.subagentCard.errorMessage) {
+        aggregate.subagent.errorMessage = entry.subagentCard.errorMessage;
+      }
+      if (entry.subagentCard.completedAt) {
+        aggregate.subagent.completedAt = entry.subagentCard.completedAt;
+      }
+      continue;
+    }
+
+    aggregate.subagent.internals.push(entry);
+  }
+
+  const subagentRows: TimelineEntry[] = [...subagentByChildSessionId.values()].map((entry) => ({
     id: entry.id,
-    kind: "work",
+    kind: "subagent",
     createdAt: entry.createdAt,
-    entry,
+    subagent: entry.subagent,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+  return [...messageRows, ...proposedPlanRows, ...workRows, ...subagentRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }

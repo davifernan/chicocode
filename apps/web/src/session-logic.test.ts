@@ -1,13 +1,8 @@
-import {
-  EventId,
-  MessageId,
-  ThreadId,
-  TurnId,
-  type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveCompletedTurnSummaryByAssistantMessageId,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   PROVIDER_OPTIONS,
@@ -16,8 +11,6 @@ import {
   deriveTimelineEntries,
   deriveWorkLogEntries,
   findLatestProposedPlan,
-  findSidebarProposedPlan,
-  hasActionableProposedPlan,
   hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "./session-logic";
@@ -142,36 +135,6 @@ describe("derivePendingApprovals", () => {
 
     expect(derivePendingApprovals(activities)).toEqual([]);
   });
-
-  it("clears stale pending approvals when the backend marks them stale after restart", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "approval-open-stale-restart",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "approval.requested",
-        summary: "Command approval requested",
-        tone: "approval",
-        payload: {
-          requestId: "req-stale-restart-1",
-          requestKind: "command",
-        },
-      }),
-      makeActivity({
-        id: "approval-failed-stale-restart",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "provider.approval.respond.failed",
-        summary: "Provider approval response failed",
-        tone: "error",
-        payload: {
-          requestId: "req-stale-restart-1",
-          detail:
-            "Stale pending approval request: req-stale-restart-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
-        },
-      }),
-    ];
-
-    expect(derivePendingApprovals(activities)).toEqual([]);
-  });
 });
 
 describe("derivePendingUserInputs", () => {
@@ -258,48 +221,6 @@ describe("derivePendingUserInputs", () => {
       },
     ]);
   });
-
-  it("clears stale pending user-input prompts when the provider reports an orphaned request", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "user-input-open-stale",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "user-input.requested",
-        summary: "User input requested",
-        tone: "info",
-        payload: {
-          requestId: "req-user-input-stale-1",
-          questions: [
-            {
-              id: "sandbox_mode",
-              header: "Sandbox",
-              question: "Which mode should be used?",
-              options: [
-                {
-                  label: "workspace-write",
-                  description: "Allow workspace writes only",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-      makeActivity({
-        id: "user-input-failed-stale",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "provider.user-input.respond.failed",
-        summary: "Provider user input response failed",
-        tone: "error",
-        payload: {
-          requestId: "req-user-input-stale-1",
-          detail:
-            "Stale pending user-input request: req-user-input-stale-1. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.",
-        },
-      }),
-    ];
-
-    expect(derivePendingUserInputs(activities)).toEqual([]);
-  });
 });
 
 describe("deriveActivePlanState", () => {
@@ -349,28 +270,28 @@ describe("findLatestProposedPlan", () => {
             id: "plan:thread-1:turn:turn-1",
             turnId: TurnId.makeUnsafe("turn-1"),
             planMarkdown: "# Older",
-            implementedAt: null,
-            implementationThreadId: null,
             createdAt: "2026-02-23T00:00:01.000Z",
             updatedAt: "2026-02-23T00:00:01.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
           {
             id: "plan:thread-1:turn:turn-1",
             turnId: TurnId.makeUnsafe("turn-1"),
             planMarkdown: "# Latest",
-            implementedAt: null,
-            implementationThreadId: null,
             createdAt: "2026-02-23T00:00:01.000Z",
             updatedAt: "2026-02-23T00:00:02.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
           {
             id: "plan:thread-1:turn:turn-2",
             turnId: TurnId.makeUnsafe("turn-2"),
             planMarkdown: "# Different turn",
-            implementedAt: null,
-            implementationThreadId: null,
             createdAt: "2026-02-23T00:00:03.000Z",
             updatedAt: "2026-02-23T00:00:03.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
         ],
         TurnId.makeUnsafe("turn-1"),
@@ -379,8 +300,6 @@ describe("findLatestProposedPlan", () => {
       id: "plan:thread-1:turn:turn-1",
       turnId: "turn-1",
       planMarkdown: "# Latest",
-      implementedAt: null,
-      implementationThreadId: null,
       createdAt: "2026-02-23T00:00:01.000Z",
       updatedAt: "2026-02-23T00:00:02.000Z",
     });
@@ -393,152 +312,25 @@ describe("findLatestProposedPlan", () => {
           id: "plan:thread-1:turn:turn-1",
           turnId: TurnId.makeUnsafe("turn-1"),
           planMarkdown: "# First",
-          implementedAt: null,
-          implementationThreadId: null,
           createdAt: "2026-02-23T00:00:01.000Z",
           updatedAt: "2026-02-23T00:00:01.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
         {
           id: "plan:thread-1:turn:turn-2",
           turnId: TurnId.makeUnsafe("turn-2"),
           planMarkdown: "# Latest",
-          implementedAt: null,
-          implementationThreadId: null,
           createdAt: "2026-02-23T00:00:02.000Z",
           updatedAt: "2026-02-23T00:00:03.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
       ],
       null,
     );
 
     expect(latestPlan?.planMarkdown).toBe("# Latest");
-  });
-});
-
-describe("hasActionableProposedPlan", () => {
-  it("returns true for an unimplemented proposed plan", () => {
-    expect(
-      hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.makeUnsafe("turn-1"),
-        planMarkdown: "# Plan",
-        implementedAt: null,
-        implementationThreadId: null,
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:01.000Z",
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for a proposed plan already implemented elsewhere", () => {
-    expect(
-      hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.makeUnsafe("turn-1"),
-        planMarkdown: "# Plan",
-        implementedAt: "2026-02-23T00:00:02.000Z",
-        implementationThreadId: ThreadId.makeUnsafe("thread-implement"),
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:02.000Z",
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("findSidebarProposedPlan", () => {
-  it("prefers the running turn source proposed plan when available on the same thread", () => {
-    expect(
-      findSidebarProposedPlan({
-        threads: [
-          {
-            id: ThreadId.makeUnsafe("thread-1"),
-            proposedPlans: [
-              {
-                id: "plan-1",
-                turnId: TurnId.makeUnsafe("turn-plan"),
-                planMarkdown: "# Source plan",
-                implementedAt: "2026-02-23T00:00:03.000Z",
-                implementationThreadId: ThreadId.makeUnsafe("thread-2"),
-                createdAt: "2026-02-23T00:00:01.000Z",
-                updatedAt: "2026-02-23T00:00:02.000Z",
-              },
-            ],
-          },
-          {
-            id: ThreadId.makeUnsafe("thread-2"),
-            proposedPlans: [
-              {
-                id: "plan-2",
-                turnId: TurnId.makeUnsafe("turn-other"),
-                planMarkdown: "# Latest elsewhere",
-                implementedAt: null,
-                implementationThreadId: null,
-                createdAt: "2026-02-23T00:00:04.000Z",
-                updatedAt: "2026-02-23T00:00:05.000Z",
-              },
-            ],
-          },
-        ],
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-implementation"),
-          sourceProposedPlan: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            planId: "plan-1",
-          },
-        },
-        latestTurnSettled: false,
-        threadId: ThreadId.makeUnsafe("thread-1"),
-      }),
-    ).toEqual({
-      id: "plan-1",
-      turnId: "turn-plan",
-      planMarkdown: "# Source plan",
-      implementedAt: "2026-02-23T00:00:03.000Z",
-      implementationThreadId: "thread-2",
-      createdAt: "2026-02-23T00:00:01.000Z",
-      updatedAt: "2026-02-23T00:00:02.000Z",
-    });
-  });
-
-  it("falls back to the latest proposed plan once the turn is settled", () => {
-    expect(
-      findSidebarProposedPlan({
-        threads: [
-          {
-            id: ThreadId.makeUnsafe("thread-1"),
-            proposedPlans: [
-              {
-                id: "plan-1",
-                turnId: TurnId.makeUnsafe("turn-plan"),
-                planMarkdown: "# Older",
-                implementedAt: null,
-                implementationThreadId: null,
-                createdAt: "2026-02-23T00:00:01.000Z",
-                updatedAt: "2026-02-23T00:00:02.000Z",
-              },
-              {
-                id: "plan-2",
-                turnId: TurnId.makeUnsafe("turn-latest"),
-                planMarkdown: "# Latest",
-                implementedAt: null,
-                implementationThreadId: null,
-                createdAt: "2026-02-23T00:00:03.000Z",
-                updatedAt: "2026-02-23T00:00:04.000Z",
-              },
-            ],
-          },
-        ],
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-implementation"),
-          sourceProposedPlan: {
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            planId: "plan-1",
-          },
-        },
-        latestTurnSettled: true,
-        threadId: ThreadId.makeUnsafe("thread-1"),
-      })?.planMarkdown,
-    ).toBe("# Latest");
   });
 });
 
@@ -561,6 +353,46 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
+  it("keeps started entries for inline subagent cards", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-started",
+          kind: "tool.started",
+          summary: "Research helper started",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            title: "Research helper",
+            status: "inProgress",
+            data: {
+              childSessionId: "child-1",
+              parentSessionId: "parent-1",
+              title: "Research helper",
+              status: "inProgress",
+              startedAt: "2026-02-23T00:00:01.000Z",
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toMatchObject([
+      {
+        id: "subagent-started",
+        itemType: "collab_agent_tool_call",
+        childSessionId: "child-1",
+        subagentCard: {
+          childSessionId: "child-1",
+          parentSessionId: "parent-1",
+          title: "Research helper",
+          status: "running",
+          startedAt: "2026-02-23T00:00:01.000Z",
+        },
+      },
+    ]);
   });
 
   it("omits task start and completion lifecycle entries", () => {
@@ -627,42 +459,6 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
-  });
-
-  it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "exit-plan-updated",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          detail: 'ExitPlanMode: {"allowedPrompts":[{"tool":"Bash","prompt":"run tests"}]}',
-        },
-      }),
-      makeActivity({
-        id: "exit-plan-completed",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.completed",
-        summary: "Tool call",
-        payload: {
-          detail: "ExitPlanMode: {}",
-        },
-      }),
-      makeActivity({
-        id: "real-work-log",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          detail: "Bash: bun test",
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["real-work-log"]);
   });
 
   it("orders work log by activity sequence when present", () => {
@@ -768,156 +564,34 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it("collapses repeated lifecycle updates for the same tool call into one entry", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-update-1",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "tool-update-2",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-          data: {
-            item: {
-              command: ["sed", "-n", "1,40p", "/tmp/app.ts"],
+  it("captures subagent identity on nested child tool activities", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-tool",
+          kind: "tool.completed",
+          summary: "Glob",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Glob",
+            detail: "src/**/*.ts",
+            data: {
+              childSessionId: "child-1",
+              parentSessionId: "parent-1",
+              subagentTitle: "Research helper",
             },
           },
-        },
-      }),
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        kind: "tool.completed",
-        summary: "Tool call completed",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-    ];
+        }),
+      ],
+      undefined,
+    );
 
-    const entries = deriveWorkLogEntries(activities, undefined);
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      id: "tool-complete",
-      createdAt: "2026-02-23T00:00:03.000Z",
-      label: "Tool call completed",
-      detail: 'Read: {"file_path":"/tmp/app.ts"}',
-      command: "sed -n 1,40p /tmp/app.ts",
-      itemType: "dynamic_tool_call",
-      toolTitle: "Tool call",
+    expect(entry).toMatchObject({
+      id: "subagent-tool",
+      childSessionId: "child-1",
+      toolTitle: "Glob",
+      detail: "src/**/*.ts",
     });
-  });
-
-  it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-1-update",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "tool-1-complete",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.completed",
-        summary: "Tool call completed",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "tool-2-update",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "tool-2-complete",
-        createdAt: "2026-02-23T00:00:04.000Z",
-        kind: "tool.completed",
-        summary: "Tool call completed",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-1-complete", "tool-2-complete"]);
-  });
-
-  it("collapses same-timestamp lifecycle rows even when completed sorts before updated by id", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "z-update-earlier",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "a-complete-same-timestamp",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.completed",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-      makeActivity({
-        id: "z-update-same-timestamp",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.updated",
-        summary: "Tool call",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Tool call",
-          detail: 'Read: {"file_path":"/tmp/app.ts"}',
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
 });
 
@@ -938,10 +612,10 @@ describe("deriveTimelineEntries", () => {
           id: "plan:thread-1:turn:turn-1",
           turnId: TurnId.makeUnsafe("turn-1"),
           planMarkdown: "# Ship it",
-          implementedAt: null,
-          implementationThreadId: null,
           createdAt: "2026-02-23T00:00:02.000Z",
           updatedAt: "2026-02-23T00:00:02.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
       ],
       [
@@ -961,6 +635,220 @@ describe("deriveTimelineEntries", () => {
         planMarkdown: "# Ship it",
         implementedAt: null,
         implementationThreadId: null,
+      },
+    });
+  });
+
+  it("aggregates subagent lifecycle and nested tool work into a dedicated timeline card", () => {
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("message-1"),
+          role: "user",
+          text: "Investigate the parser bug",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            parentSessionId: "parent-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Inspect the parser regression",
+            startedAt: "2026-02-23T00:00:01.000Z",
+          },
+        },
+        {
+          id: "subagent-tool",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Glob",
+          detail: "src/**/*.ts",
+          tone: "tool",
+          itemType: "dynamic_tool_call",
+          toolTitle: "Glob",
+          childSessionId: "child-1",
+        },
+        {
+          id: "subagent-completed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          label: "Research helper",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            parentSessionId: "parent-1",
+            title: "Research helper",
+            status: "completed",
+            inputText: "Inspect the parser regression",
+            outputText: "The tokenizer strips escaped pipes before parsing.",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:03.000Z",
+          },
+        },
+        {
+          id: "generic-tool",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          label: "Ran tests",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "subagent", "work"]);
+    expect(entries[1]).toMatchObject({
+      kind: "subagent",
+      subagent: {
+        childSessionId: "child-1",
+        title: "Research helper",
+        status: "completed",
+        inputText: "Inspect the parser regression",
+        outputText: "The tokenizer strips escaped pipes before parsing.",
+        completedAt: "2026-02-23T00:00:03.000Z",
+        internals: [
+          {
+            id: "subagent-tool",
+            toolTitle: "Glob",
+            detail: "src/**/*.ts",
+          },
+        ],
+      },
+    });
+    expect(entries[2]).toMatchObject({
+      kind: "work",
+      entry: {
+        id: "generic-tool",
+        label: "Ran tests",
+      },
+    });
+  });
+
+  it("suppresses duplicate task bridge rows when the subagent card already captures that lifecycle", () => {
+    const entries = deriveTimelineEntries(
+      [],
+      [],
+      [
+        {
+          id: "task-start",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          label: "Task",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "task-start-duplicate",
+          createdAt: "2026-02-23T00:00:00.500Z",
+          label: "Task completed",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "task-input-echo",
+          createdAt: "2026-02-23T00:00:00.750Z",
+          label: "Find all MD files",
+          tone: "tool",
+        },
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Find all MD files",
+            startedAt: "2026-02-23T00:00:01.000Z",
+          },
+        },
+        {
+          id: "subagent-completed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          label: "Research helper",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "completed",
+            inputText: "Find all MD files",
+            outputText: "README.md\ndocs/guide.md",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:03.000Z",
+          },
+        },
+        {
+          id: "task-result-echo",
+          createdAt: "2026-02-23T00:00:03.500Z",
+          label: "Task",
+          detail: "task_id: abc123 <task_result>README.md\ndocs/guide.md</task_result>",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+      ],
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: "subagent",
+      subagent: {
+        childSessionId: "child-1",
+        inputText: "Find all MD files",
+        outputText: "README.md\ndocs/guide.md",
+      },
+    });
+  });
+
+  it("keeps unrelated task rows when they do not match the subagent bridge heuristic", () => {
+    const entries = deriveTimelineEntries(
+      [],
+      [],
+      [
+        {
+          id: "task-row",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          label: "Task",
+          detail: "Prepare release notes",
+          tone: "tool",
+          toolTitle: "Task",
+        },
+        {
+          id: "subagent-started",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          label: "Research helper started",
+          tone: "tool",
+          itemType: "collab_agent_tool_call",
+          childSessionId: "child-1",
+          subagentCard: {
+            childSessionId: "child-1",
+            title: "Research helper",
+            status: "running",
+            inputText: "Find all MD files",
+            startedAt: "2026-02-23T00:00:05.000Z",
+          },
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual(["work", "subagent"]);
+    expect(entries[0]).toMatchObject({
+      kind: "work",
+      entry: {
+        id: "task-row",
+        detail: "Prepare release notes",
       },
     });
   });
@@ -990,6 +878,7 @@ describe("hasToolActivityForTurn", () => {
 describe("isLatestTurnSettled", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    requestedAt: "2026-02-27T21:09:58.000Z",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
@@ -1003,13 +892,13 @@ describe("isLatestTurnSettled", () => {
     ).toBe(false);
   });
 
-  it("returns false while any turn is running to avoid stale latest-turn banners", () => {
+  it("returns true once a different turn is active in the running session", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-2"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true once the session is no longer running that turn", () => {
@@ -1026,6 +915,7 @@ describe("isLatestTurnSettled", () => {
       isLatestTurnSettled(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
           startedAt: null,
           completedAt: "2026-02-27T21:10:06.000Z",
         },
@@ -1038,6 +928,7 @@ describe("isLatestTurnSettled", () => {
 describe("deriveActiveWorkStartedAt", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    requestedAt: "2026-02-27T21:09:58.000Z",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
@@ -1073,6 +964,7 @@ describe("deriveActiveWorkStartedAt", () => {
       deriveActiveWorkStartedAt(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
           startedAt: "2026-02-27T21:10:00.000Z",
           completedAt: "2026-02-27T21:10:06.000Z",
         },
@@ -1081,21 +973,169 @@ describe("deriveActiveWorkStartedAt", () => {
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
   });
+
+  it("uses sendStartedAt when a newer turn is active but latestTurn is still the prior run", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        latestTurn,
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-2"),
+        },
+        "2026-02-27T21:11:00.000Z",
+      ),
+    ).toBe("2026-02-27T21:11:00.000Z");
+  });
+
+  it("uses requestedAt while the active turn is still waiting to start", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          requestedAt: "2026-02-27T21:09:58.000Z",
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+        "2026-02-27T21:11:00.000Z",
+      ),
+    ).toBe("2026-02-27T21:09:58.000Z");
+  });
+});
+
+describe("deriveCompletedTurnSummaryByAssistantMessageId", () => {
+  it("keeps completed run summaries keyed to each assistant message", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-start",
+        kind: "turn.started",
+        tone: "info",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:00.000Z",
+      }),
+      makeActivity({
+        id: "turn-1-tool",
+        kind: "tool.completed",
+        tone: "tool",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:04.000Z",
+      }),
+      makeActivity({
+        id: "turn-1-complete",
+        kind: "turn.completed",
+        tone: "info",
+        turnId: "turn-1",
+        createdAt: "2026-02-27T21:10:12.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-start",
+        kind: "turn.started",
+        tone: "info",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:00.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-tool",
+        kind: "tool.completed",
+        tone: "tool",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:03.000Z",
+      }),
+      makeActivity({
+        id: "turn-2-complete",
+        kind: "turn.completed",
+        tone: "info",
+        turnId: "turn-2",
+        createdAt: "2026-02-27T21:11:08.000Z",
+      }),
+    ];
+
+    const result = deriveCompletedTurnSummaryByAssistantMessageId(
+      activities,
+      [
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          completedAt: "2026-02-27T21:10:12.000Z",
+          files: [{ path: "apps/web/src/session-logic.ts" }],
+          assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+        },
+        {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          completedAt: "2026-02-27T21:11:08.000Z",
+          files: [{ path: "apps/web/src/components/ChatView.tsx" }],
+          assistantMessageId: MessageId.makeUnsafe("assistant-2"),
+        },
+      ],
+      {
+        turnId: TurnId.makeUnsafe("turn-2"),
+        requestedAt: "2026-02-27T21:10:58.000Z",
+        startedAt: "2026-02-27T21:11:00.000Z",
+        completedAt: "2026-02-27T21:11:08.000Z",
+        assistantMessageId: MessageId.makeUnsafe("assistant-2"),
+      },
+      {
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.makeUnsafe("turn-3"),
+      },
+    );
+
+    expect(Array.from(result.entries())).toEqual([
+      ["assistant-1", "Worked for 12s"],
+      ["assistant-2", "Worked for 8.0s"],
+    ]);
+  });
+
+  it("skips turns without tool activity or valid timing", () => {
+    const result = deriveCompletedTurnSummaryByAssistantMessageId(
+      [
+        makeActivity({
+          id: "turn-1-start",
+          kind: "turn.started",
+          tone: "info",
+          turnId: "turn-1",
+          createdAt: "2026-02-27T21:10:00.000Z",
+        }),
+        makeActivity({
+          id: "turn-1-complete",
+          kind: "turn.completed",
+          tone: "info",
+          turnId: "turn-1",
+          createdAt: "2026-02-27T21:10:05.000Z",
+        }),
+      ],
+      [
+        {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          completedAt: "2026-02-27T21:10:05.000Z",
+          files: [],
+          assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+        },
+      ],
+      null,
+      null,
+    );
+
+    expect(result.size).toBe(0);
+  });
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("advertises Claude as available while keeping Cursor as a placeholder", () => {
-    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
+  it("keeps Claude Code and Cursor visible as unavailable placeholders in the stack base", () => {
+    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
-      { value: "claudeAgent", label: "Claude", available: true },
+      { value: "opencode", label: "OpenCode", available: true },
+      { value: "claudeCode", label: "Claude Code", available: false },
       { value: "cursor", label: "Cursor", available: false },
     ]);
     expect(claude).toEqual({
-      value: "claudeAgent",
-      label: "Claude",
-      available: true,
+      value: "claudeCode",
+      label: "Claude Code",
+      available: false,
     });
     expect(cursor).toEqual({
       value: "cursor",

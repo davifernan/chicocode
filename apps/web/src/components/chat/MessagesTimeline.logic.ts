@@ -27,3 +27,21 @@ export function computeMessageDurationStart(
 export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
+
+function normalizeCompactPreviewText(value: string): string {
+  return value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
+export function getDistinctWorkEntryPreview(
+  heading: string,
+  preview: string | null | undefined,
+): string | null {
+  const trimmedPreview = preview?.trim();
+  if (!trimmedPreview) {
+    return null;
+  }
+
+  return normalizeCompactPreviewText(heading) === normalizeCompactPreviewText(trimmedPreview)
+    ? null
+    : trimmedPreview;
+}

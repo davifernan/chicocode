@@ -7,7 +7,16 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
+import {
+  appendDevServerLogLines,
+  mapProjectsFromReadModel,
+  markThreadUnread,
+  reorderProjects,
+  setProjectExpanded,
+  syncServerReadModel,
+  toggleThreadStarred,
+  type AppState,
+} from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -158,6 +167,21 @@ describe("store pure functions", () => {
     expect(next).toEqual(initialState);
   });
 
+  it("toggleThreadStarred flips the starred state for a thread", () => {
+    const initialState = makeState(
+      makeThread({
+        starred: false,
+      }),
+    );
+
+    const next = toggleThreadStarred(initialState, ThreadId.makeUnsafe("thread-1"));
+
+    expect(next.threads[0]?.starred).toBe(true);
+    expect(toggleThreadStarred(next, ThreadId.makeUnsafe("thread-1")).threads[0]?.starred).toBe(
+      false,
+    );
+  });
+
   it("reorderProjects moves a project to a target index", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
@@ -199,6 +223,88 @@ describe("store pure functions", () => {
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project3, project1]);
   });
+
+  it("expanding a project collapses the others", () => {
+    const project1 = ProjectId.makeUnsafe("project-1");
+    const project2 = ProjectId.makeUnsafe("project-2");
+    const state: AppState = {
+      projects: [
+        {
+          id: project1,
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project2,
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          expanded: false,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
+    };
+
+    const next = setProjectExpanded(state, project2, true);
+
+    expect(next.projects).toMatchObject([
+      { id: project1, expanded: false },
+      { id: project2, expanded: true },
+    ]);
+  });
+
+  it("keeps up to the configured number of expanded projects", () => {
+    const project1 = ProjectId.makeUnsafe("project-1");
+    const project2 = ProjectId.makeUnsafe("project-2");
+    const project3 = ProjectId.makeUnsafe("project-3");
+    const state: AppState = {
+      projects: [
+        {
+          id: project1,
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project2,
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project3,
+          name: "Project 3",
+          cwd: "/tmp/project-3",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          expanded: false,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
+    };
+
+    const next = setProjectExpanded(state, project3, true, 2);
+
+    expect(next.projects).toMatchObject([
+      { id: project1, expanded: false },
+      { id: project2, expanded: true },
+      { id: project3, expanded: true },
+    ]);
+  });
 });
 
 describe("store read model sync", () => {
@@ -235,6 +341,18 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.threads[0]?.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("preserves starred state when a thread receives a fresh read-model snapshot", () => {
+    const initialState = makeState(
+      makeThread({
+        starred: true,
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, makeReadModel(makeReadModelThread({})));
+
+    expect(next.threads[0]?.starred).toBe(true);
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {
@@ -291,5 +409,135 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
+  });
+
+  it("uses persisted ordering for projects that arrive after the first snapshot", () => {
+    const bootstrapProject = makeReadModelProject({
+      id: ProjectId.makeUnsafe("project-bootstrap"),
+      title: "Bootstrap",
+      workspaceRoot: "/tmp/bootstrap",
+    });
+    const project1 = makeReadModelProject({
+      id: ProjectId.makeUnsafe("project-1"),
+      title: "Project 1",
+      workspaceRoot: "/tmp/project-1",
+    });
+    const project2 = makeReadModelProject({
+      id: ProjectId.makeUnsafe("project-2"),
+      title: "Project 2",
+      workspaceRoot: "/tmp/project-2",
+    });
+
+    const previousProjects = [
+      {
+        id: ProjectId.makeUnsafe("project-bootstrap"),
+        name: "Bootstrap",
+        cwd: "/tmp/bootstrap",
+        model: DEFAULT_MODEL_BY_PROVIDER.codex,
+        expanded: true,
+        scripts: [],
+      },
+    ];
+
+    const next = mapProjectsFromReadModel(
+      [project1, bootstrapProject, project2],
+      previousProjects,
+      {
+        persistedExpandedCwds: new Set<string>(),
+        persistedOrderCwds: ["/tmp/project-2", "/tmp/project-1"],
+      },
+    );
+
+    expect(next.map((project) => project.cwd)).toEqual([
+      "/tmp/bootstrap",
+      "/tmp/project-2",
+      "/tmp/project-1",
+    ]);
+  });
+});
+
+// ── appendDevServerLogLines ───────────────────────────────────────────────────
+
+describe("appendDevServerLogLines", () => {
+  const pid = "project-1";
+
+  const emptyState = (): AppState => ({
+    projects: [],
+    threads: [],
+    threadsHydrated: false,
+    devServerByProjectId: {},
+    devServerLogsByProjectId: {},
+  });
+
+  it("returns the same state reference when lines is empty", () => {
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, []);
+    expect(next).toBe(state);
+  });
+
+  it("appends lines to an empty log buffer", () => {
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, ["line1", "line2"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["line1", "line2"]);
+  });
+
+  it("appends lines to an existing log buffer", () => {
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [pid]: ["old"] },
+    };
+    const next = appendDevServerLogLines(state, pid, ["new1", "new2"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["old", "new1", "new2"]);
+  });
+
+  it("preserves logs for other projects", () => {
+    const other = "project-2";
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [other]: ["untouched"] },
+    };
+    const next = appendDevServerLogLines(state, pid, ["line1"]);
+    expect(next.devServerLogsByProjectId[other]).toEqual(["untouched"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["line1"]);
+  });
+
+  it("trims the oldest lines when the buffer would exceed DEV_SERVER_MAX_LOG_LINES (500)", () => {
+    // Fill the buffer to exactly 500 lines
+    const existing = Array.from({ length: 500 }, (_, i) => `existing-${i}`);
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [pid]: existing },
+    };
+    const newLines = ["new1", "new2", "new3"];
+    const next = appendDevServerLogLines(state, pid, newLines);
+    const result = next.devServerLogsByProjectId[pid] ?? [];
+
+    expect(result.length).toBe(500);
+    // The oldest lines are removed to make room
+    expect(result.at(-1)).toBe("new3");
+    expect(result.at(-2)).toBe("new2");
+    expect(result.at(-3)).toBe("new1");
+    // Oldest existing lines are gone
+    expect(result.includes("existing-0")).toBe(false);
+    expect(result.includes("existing-1")).toBe(false);
+    expect(result.includes("existing-2")).toBe(false);
+  });
+
+  it("handles a batch larger than the cap by keeping only the tail", () => {
+    const newLines = Array.from({ length: 600 }, (_, i) => `line-${i}`);
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, newLines);
+    const result = next.devServerLogsByProjectId[pid] ?? [];
+
+    expect(result.length).toBe(500);
+    expect(result[0]).toBe("line-100"); // first of the kept tail
+    expect(result.at(-1)).toBe("line-599");
+  });
+
+  it("does not mutate the original state", () => {
+    const state = emptyState();
+    const stateBefore = JSON.stringify(state);
+    appendDevServerLogLines(state, pid, ["a", "b"]);
+    expect(JSON.stringify(state)).toBe(stateBefore);
   });
 });

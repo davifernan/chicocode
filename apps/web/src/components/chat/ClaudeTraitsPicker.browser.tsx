@@ -27,6 +27,14 @@ async function mountPicker(props?: {
     terminalContexts: [],
     provider: "claudeAgent",
     model: props?.model ?? "claude-opus-4-6",
+    opencodeAgent: null,
+    opencodeVariant: null,
+    opencodeAllowQuestions: null,
+    effort: null,
+    codexFastMode: false,
+    claudeEffort: props?.effort ?? null,
+    claudeThinking: props?.thinkingEnabled ?? false,
+    claudeFastMode: props?.fastModeEnabled ?? false,
     modelOptions: {
       claudeAgent: {
         ...(props?.effort ? { effort: props.effort } : {}),

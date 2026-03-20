@@ -54,11 +54,11 @@ function CodexTraitsMenuContentImpl(props: { threadId: ThreadId }) {
 
   const setCodexModelOptions = (nextCodexModelOptions: CodexModelOptions | undefined) => {
     const { codex: _discardedCodex, ...otherProviderModelOptions } = draft.modelOptions ?? {};
-    const nextProviderModelOptions: ProviderModelOptions | undefined = nextCodexModelOptions
+    const nextProviderModelOptions: ProviderModelOptions = nextCodexModelOptions
       ? { ...otherProviderModelOptions, codex: nextCodexModelOptions }
       : Object.keys(otherProviderModelOptions).length > 0
         ? otherProviderModelOptions
-        : undefined;
+        : {};
     setModelOptions(props.threadId, nextProviderModelOptions);
   };
 

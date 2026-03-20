@@ -181,6 +181,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ### SSL Certificate (Cloudflare Origin Cert)
 
 In the Cloudflare dashboard:
+
 - **SSL/TLS → Origin Server → Create Certificate**
 - Select `code.nilo.live`, validity 15 years
 - Download `.crt` and `.key`
@@ -190,12 +191,12 @@ In the Cloudflare dashboard:
 
 ## 5. Cloudflare DNS & Proxy Settings
 
-| Setting | Value |
-|---|---|
+| Setting      | Value                                                      |
+| ------------ | ---------------------------------------------------------- |
 | DNS A Record | `code.nilo.live → <SERVER_IP>` (Proxied = orange cloud ON) |
-| SSL/TLS Mode | **Full (strict)** |
-| WebSockets | **On** (Network → WebSockets) |
-| Minimum TLS | TLS 1.2 |
+| SSL/TLS Mode | **Full (strict)**                                          |
+| WebSockets   | **On** (Network → WebSockets)                              |
+| Minimum TLS  | TLS 1.2                                                    |
 
 > **WebSockets must be ON** — T3 Code requires a persistent WS connection.  
 > Without it, the UI will connect but immediately disconnect.
@@ -246,13 +247,13 @@ sudo systemctl restart t3code
 
 ## Troubleshooting
 
-| Symptom | Check |
-|---|---|
-| UI loads but WS disconnects immediately | Cloudflare WebSockets OFF — enable it |
-| `401` on WS connection | Token mismatch — check `/etc/t3code/env` vs UI input |
-| Blank page / 502 | systemd service not running — `systemctl status t3code` |
-| WS works on HTTP, broken on HTTPS | Nginx missing `Upgrade`/`Connection` headers |
-| `codex` not found | `npm install -g @openai/codex` not done or not in PATH for t3code user |
+| Symptom                                 | Check                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| UI loads but WS disconnects immediately | Cloudflare WebSockets OFF — enable it                                  |
+| `401` on WS connection                  | Token mismatch — check `/etc/t3code/env` vs UI input                   |
+| Blank page / 502                        | systemd service not running — `systemctl status t3code`                |
+| WS works on HTTP, broken on HTTPS       | Nginx missing `Upgrade`/`Connection` headers                           |
+| `codex` not found                       | `npm install -g @openai/codex` not done or not in PATH for t3code user |
 
 ---
 

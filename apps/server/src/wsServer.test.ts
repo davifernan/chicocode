@@ -782,6 +782,64 @@ describe("WebSocket Server", () => {
     );
   });
 
+  it("persists ui state in sqlite across server restarts", async () => {
+    const stateDir = makeTempDir("t3code-state-ui-state-");
+    const persistenceLayer = makeSqlitePersistenceLive(path.join(stateDir, "state.sqlite")).pipe(
+      Layer.provide(NodeServices.layer),
+    );
+
+    server = await createTestServer({
+      cwd: "/test/ui-state",
+      stateDir,
+      persistenceLayer,
+    });
+    let addr = server.address();
+    let port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    const [firstWs] = await connectAndAwaitWelcome(port);
+    connections.push(firstWs);
+
+    const missingResponse = await sendRequest(firstWs, WS_METHODS.serverGetUiState, {
+      key: "rendererState",
+    });
+    expect(missingResponse.error).toBeUndefined();
+    expect(missingResponse.result).toEqual({ valueJson: null });
+
+    const valueJson = JSON.stringify({
+      expandedProjectCwds: ["/tmp/project-2"],
+      projectOrderCwds: ["/tmp/project-2", "/tmp/project-1"],
+      starredThreadIds: ["thread-2"],
+    });
+    const upsertResponse = await sendRequest(firstWs, WS_METHODS.serverUpsertUiState, {
+      key: "rendererState",
+      valueJson,
+    });
+    expect(upsertResponse.error).toBeUndefined();
+
+    firstWs.close();
+    await closeTestServer();
+    server = null;
+
+    server = await createTestServer({
+      cwd: "/test/ui-state",
+      stateDir,
+      persistenceLayer,
+    });
+    addr = server.address();
+    port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    const [secondWs] = await connectAndAwaitWelcome(port);
+    connections.push(secondWs);
+
+    const persistedResponse = await sendRequest(secondWs, WS_METHODS.serverGetUiState, {
+      key: "rendererState",
+    });
+    expect(persistedResponse.error).toBeUndefined();
+    expect(persistedResponse.result).toEqual({ valueJson });
+  });
+
   it("logs outbound websocket push events in dev mode", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {
       // Keep test output clean while verifying websocket logs.

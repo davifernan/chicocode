@@ -11,19 +11,28 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { AppShellSkeleton } from "../components/AppShellSkeleton";
+import { SyncStatusBanner } from "../components/SyncStatusBanner";
+import { hydrateAppSettingsFromSerialized, readPersistedAppSettingsValue } from "../appSettings";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
-import { useStore } from "../store";
+import {
+  hydratePersistedRendererState,
+  markRendererPersistenceReady,
+  readPersistedRendererStateValue,
+  useStore,
+} from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { hydrateServerUiState } from "../serverUiState";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -37,15 +46,7 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   if (!readNativeApi()) {
-    return (
-      <div className="flex h-screen flex-col bg-background text-foreground">
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">
-            Connecting to {APP_DISPLAY_NAME} server...
-          </p>
-        </div>
-      </div>
-    );
+    return <AppShellSkeleton />;
   }
 
   return (
@@ -53,6 +54,7 @@ function RootRouteView() {
       <AnchoredToastProvider>
         <EventRouter />
         <DesktopProjectBootstrap />
+        <SyncStatusBanner />
         <Outlet />
       </AnchoredToastProvider>
     </ToastProvider>
@@ -133,6 +135,10 @@ function errorDetails(error: unknown): string {
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
+  const upsertDevServerStatus = useStore((store) => store.upsertDevServerStatus);
+  const appendDevServerLogLine = useStore((store) => store.appendDevServerLogLine);
+  const appendDevServerLogLinesBatch = useStore((store) => store.appendDevServerLogLinesBatch);
+  const setDevServerLogs = useStore((store) => store.setDevServerLogs);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
@@ -152,8 +158,23 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    const persistenceReady = Promise.all([
+      hydrateServerUiState({
+        key: "appSettings",
+        readLegacyValue: readPersistedAppSettingsValue,
+        onHydrate: hydrateAppSettingsFromSerialized,
+      }),
+      hydrateServerUiState({
+        key: "rendererState",
+        readLegacyValue: readPersistedRendererStateValue,
+        onHydrate: hydratePersistedRendererState,
+      }),
+    ]).finally(() => {
+      markRendererPersistenceReady();
+    });
 
     const flushSnapshotSync = async (): Promise<void> => {
+      await persistenceReady;
       const snapshot = await api.orchestration.getSnapshot();
       if (disposed) return;
       latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
@@ -216,6 +237,38 @@ function EventRouter() {
       }
       domainEventFlushThrottler.maybeExecute();
     });
+    const unsubDevServerStatus = api.devServer.onStatusChanged((info) => {
+      upsertDevServerStatus(info);
+    });
+    // Buffer incoming log lines and flush at most once per animation frame.
+    // During dev-server startup, many lines arrive in rapid succession (one WS
+    // message each). Without batching every message triggers its own Zustand
+    // set() → React render → ANSI-parse + DOM-reflow.  Collecting them per rAF
+    // frame (≤16 ms) collapses N renders into 1 and eliminates the perceived
+    // 1-2 s lag in the Dev Logs panel.
+    const pendingLogLines = new Map<string, string[]>();
+    let rafHandle: number | null = null;
+
+    const flushPendingLogLines = () => {
+      rafHandle = null;
+      for (const [projectId, lines] of pendingLogLines) {
+        appendDevServerLogLinesBatch(projectId, lines);
+      }
+      pendingLogLines.clear();
+    };
+
+    const unsubDevServerLogLine = api.devServer.onLogLine((payload) => {
+      const existing = pendingLogLines.get(payload.projectId);
+      if (existing) {
+        existing.push(payload.line);
+      } else {
+        pendingLogLines.set(payload.projectId, [payload.line]);
+      }
+      if (rafHandle === null) {
+        rafHandle = requestAnimationFrame(flushPendingLogLines);
+      }
+    });
+
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
       if (hasRunningSubprocess === null) {
@@ -231,7 +284,40 @@ function EventRouter() {
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
+        // Reset the sequence baseline on every welcome (initial connect or reconnect)
+        // so that domain events from a freshly (re)started server are never dropped
+        // by the event.sequence <= latestSequence guard.
+        latestSequence = 0;
         await syncSnapshot();
+
+        // Seed dev server statuses and recent log history from server on (re)connect.
+        // Fetching logs here ensures the panel shows context immediately after a
+        // Cmd+Shift+R / window reload — the server keeps a rolling 500-line buffer
+        // even while our WebSocket was disconnected.
+        try {
+          const statuses = await api.devServer.getStatuses();
+          for (const info of statuses) {
+            upsertDevServerStatus(info);
+
+            if (info.status === "running" || info.status === "starting") {
+              // Fire-and-forget per project — don't block the status loop
+              void api.devServer
+                .getLogs({ projectId: info.projectId, limit: 200 })
+                .then((lines) => {
+                  if (lines.length > 0 && !disposed) {
+                    // Replace (not append) so stale client-side lines are
+                    // discarded and the server's authoritative view is shown.
+                    setDevServerLogs(info.projectId, lines);
+                  }
+                })
+                .catch(() => {
+                  // Best-effort — push events will fill the gap
+                });
+            }
+          }
+        } catch {
+          // Best-effort seeding — push events will keep state up to date
+        }
         if (disposed) {
           return;
         }
@@ -304,9 +390,16 @@ function EventRouter() {
     return () => {
       disposed = true;
       needsProviderInvalidation = false;
+      if (rafHandle !== null) {
+        cancelAnimationFrame(rafHandle);
+        rafHandle = null;
+      }
+      pendingLogLines.clear();
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
+      unsubDevServerStatus();
+      unsubDevServerLogLine();
       unsubWelcome();
       unsubServerConfigUpdated();
     };
@@ -316,6 +409,10 @@ function EventRouter() {
     removeOrphanedTerminalStates,
     setProjectExpanded,
     syncServerReadModel,
+    upsertDevServerStatus,
+    appendDevServerLogLine,
+    appendDevServerLogLinesBatch,
+    setDevServerLogs,
   ]);
 
   return null;

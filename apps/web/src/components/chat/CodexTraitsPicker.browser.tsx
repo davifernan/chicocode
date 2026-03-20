@@ -24,6 +24,14 @@ async function mountPicker(props: {
     terminalContexts: [],
     provider: "codex",
     model: null,
+    opencodeAgent: null,
+    opencodeVariant: null,
+    opencodeAllowQuestions: null,
+    effort: props.reasoningEffort ?? null,
+    codexFastMode: props.fastModeEnabled,
+    claudeEffort: null,
+    claudeThinking: false,
+    claudeFastMode: false,
     modelOptions: {
       codex: {
         ...(props.reasoningEffort ? { reasoningEffort: props.reasoningEffort } : {}),
