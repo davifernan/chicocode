@@ -9,11 +9,23 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as DevServerPreviewRouteImport } from './routes/dev-server-preview'
+import { Route as DevLogsPopoutRouteImport } from './routes/dev-logs-popout'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 
+const DevServerPreviewRoute = DevServerPreviewRouteImport.update({
+  id: '/dev-server-preview',
+  path: '/dev-server-preview',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevLogsPopoutRoute = DevLogsPopoutRouteImport.update({
+  id: '/dev-logs-popout',
+  path: '/dev-logs-popout',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
@@ -36,10 +48,14 @@ const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
+  '/dev-logs-popout': typeof DevLogsPopoutRoute
+  '/dev-server-preview': typeof DevServerPreviewRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/settings': typeof ChatSettingsRoute
 }
 export interface FileRoutesByTo {
+  '/dev-logs-popout': typeof DevLogsPopoutRoute
+  '/dev-server-preview': typeof DevServerPreviewRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/settings': typeof ChatSettingsRoute
   '/': typeof ChatIndexRoute
@@ -47,24 +63,59 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/dev-logs-popout': typeof DevLogsPopoutRoute
+  '/dev-server-preview': typeof DevServerPreviewRoute
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/': typeof ChatIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$threadId' | '/settings'
+  fullPaths:
+    | '/'
+    | '/dev-logs-popout'
+    | '/dev-server-preview'
+    | '/$threadId'
+    | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/$threadId' | '/settings' | '/'
-  id: '__root__' | '/_chat' | '/_chat/$threadId' | '/_chat/settings' | '/_chat/'
+  to:
+    | '/dev-logs-popout'
+    | '/dev-server-preview'
+    | '/$threadId'
+    | '/settings'
+    | '/'
+  id:
+    | '__root__'
+    | '/_chat'
+    | '/dev-logs-popout'
+    | '/dev-server-preview'
+    | '/_chat/$threadId'
+    | '/_chat/settings'
+    | '/_chat/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  DevLogsPopoutRoute: typeof DevLogsPopoutRoute
+  DevServerPreviewRoute: typeof DevServerPreviewRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/dev-server-preview': {
+      id: '/dev-server-preview'
+      path: '/dev-server-preview'
+      fullPath: '/dev-server-preview'
+      preLoaderRoute: typeof DevServerPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev-logs-popout': {
+      id: '/dev-logs-popout'
+      path: '/dev-logs-popout'
+      fullPath: '/dev-logs-popout'
+      preLoaderRoute: typeof DevLogsPopoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -112,6 +163,8 @@ const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  DevLogsPopoutRoute: DevLogsPopoutRoute,
+  DevServerPreviewRoute: DevServerPreviewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

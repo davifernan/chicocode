@@ -122,6 +122,8 @@ describe("CheckpointDiffQueryLive", () => {
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.succeed(snapshot),
+          getSummarySnapshot: () => Effect.die("unused in test"),
+          getThreadMessages: () => Effect.die("unused in test"),
         }),
       ),
     );
@@ -177,6 +179,8 @@ describe("CheckpointDiffQueryLive", () => {
               threads: [],
               updatedAt: "2026-01-01T00:00:00.000Z",
             } satisfies OrchestrationReadModel),
+          getSummarySnapshot: () => Effect.die("unused in test"),
+          getThreadMessages: () => Effect.die("unused in test"),
         }),
       ),
     );

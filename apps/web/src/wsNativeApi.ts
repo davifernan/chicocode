@@ -7,6 +7,9 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type RemoteConnectionStatus,
+  type RemoteServerMetrics,
+  type RemoteSyncStatus,
 } from "@t3tools/contracts";
 
 import { showContextMenuFallback } from "./contextMenuFallback";
@@ -15,6 +18,9 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const remoteConnectionStatusListeners = new Set<(payload: RemoteConnectionStatus) => void>();
+const remoteSyncStatusListeners = new Set<(payload: RemoteSyncStatus) => void>();
+const remoteMetricsListeners = new Set<(payload: RemoteServerMetrics) => void>();
 
 /**
  * Subscribe to the server welcome message. If a welcome was already received
@@ -84,6 +90,39 @@ export function createWsNativeApi(): NativeApi {
         listener(payload);
       } catch {
         // Swallow listener errors
+      }
+    }
+  });
+
+  transport.subscribe(WS_CHANNELS.serverRemoteConnectionStatus, (message) => {
+    const payload = message.data;
+    for (const listener of remoteConnectionStatusListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // swallow
+      }
+    }
+  });
+
+  transport.subscribe(WS_CHANNELS.serverRemoteSyncStatus, (message) => {
+    const payload = message.data;
+    for (const listener of remoteSyncStatusListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // swallow
+      }
+    }
+  });
+
+  transport.subscribe(WS_CHANNELS.serverMetrics, (message) => {
+    const payload = message.data;
+    for (const listener of remoteMetricsListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // swallow
       }
     }
   });
@@ -159,10 +198,14 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getUiState: (input) => transport.request(WS_METHODS.serverGetUiState, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      upsertUiState: (input) => transport.request(WS_METHODS.serverUpsertUiState, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
+      getThreadMessages: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getThreadMessages, input),
       dispatchCommand: (command) =>
         transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command }),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
@@ -174,6 +217,53 @@ export function createWsNativeApi(): NativeApi {
         transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) =>
           callback(message.data),
         ),
+    },
+    devServer: {
+      start: (input) => transport.request(WS_METHODS.devServerStart, input),
+      restart: (input) => transport.request(WS_METHODS.devServerRestart, input),
+      stop: (input) => transport.request(WS_METHODS.devServerStop, input),
+      stopAll: () => transport.request(WS_METHODS.devServerStopAll),
+      getStatus: (input) => transport.request(WS_METHODS.devServerGetStatus, input),
+      getStatuses: () => transport.request(WS_METHODS.devServerGetStatuses),
+      getLogs: (input) => transport.request(WS_METHODS.devServerGetLogs, input),
+      onStatusChanged: (callback) =>
+        transport.subscribe(WS_CHANNELS.devServerStatusChanged, (message) =>
+          callback(message.data),
+        ),
+      onLogLine: (callback) =>
+        transport.subscribe(WS_CHANNELS.devServerLogLine, (message) => callback(message.data)),
+    },
+    remoteHost: {
+      setConfig: (config) => transport.request(WS_METHODS.serverSetRemoteHostConfig, { config }),
+      testConnection: (config) =>
+        transport.request(WS_METHODS.serverTestRemoteConnection, { config }),
+      onConnectionStatus: (callback) => {
+        remoteConnectionStatusListeners.add(callback);
+        return () => {
+          remoteConnectionStatusListeners.delete(callback);
+        };
+      },
+      onSyncStatus: (callback) => {
+        remoteSyncStatusListeners.add(callback);
+        return () => {
+          remoteSyncStatusListeners.delete(callback);
+        };
+      },
+      onMetrics: (callback) => {
+        remoteMetricsListeners.add(callback);
+        return () => {
+          remoteMetricsListeners.delete(callback);
+        };
+      },
+    },
+    sync: {
+      getThreadManifest: () => transport.request(WS_METHODS.syncGetThreadManifest),
+      exportThreadEvents: (threadId) =>
+        transport.request(WS_METHODS.syncExportThreadEvents, { threadId }),
+      receiveEvents: (events) => transport.request(WS_METHODS.syncReceiveEvents, { events }),
+    },
+    opencode: {
+      forkSession: (input) => transport.request(WS_METHODS.opencodeForksession, input),
     },
   };
 

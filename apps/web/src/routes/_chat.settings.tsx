@@ -55,6 +55,13 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     example: "gpt-6.7-codex-ultra-preview",
   },
   {
+    provider: "opencode",
+    title: "OpenCode",
+    description: "Save additional OpenCode model slugs for the picker and `/model` command.",
+    placeholder: "your-opencode-model-slug",
+    example: "anthropic/claude-sonnet-4-6",
+  },
+  {
     provider: "claudeAgent",
     title: "Claude",
     description: "Save additional Claude model slugs for the picker and `/model` command.",
@@ -76,6 +83,8 @@ function getCustomModelsForProvider(
   switch (provider) {
     case "claudeAgent":
       return settings.customClaudeModels;
+    case "opencode":
+      return settings.customOpenCodeModels;
     case "codex":
     default:
       return settings.customCodexModels;
@@ -89,6 +98,8 @@ function getDefaultCustomModelsForProvider(
   switch (provider) {
     case "claudeAgent":
       return defaults.customClaudeModels;
+    case "opencode":
+      return defaults.customOpenCodeModels;
     case "codex":
     default:
       return defaults.customCodexModels;
@@ -99,6 +110,8 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
     case "claudeAgent":
       return { customClaudeModels: models };
+    case "opencode":
+      return { customOpenCodeModels: models };
     case "codex":
     default:
       return { customCodexModels: models };
@@ -115,6 +128,7 @@ function SettingsRouteView() {
     Record<ProviderKind, string>
   >({
     codex: "",
+    opencode: "",
     claudeAgent: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<

@@ -28,6 +28,7 @@ export const PROVIDER_OPTIONS: Array<{
   available: boolean;
 }> = [
   { value: "codex", label: "Codex", available: true },
+  { value: "opencode", label: "OpenCode", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
   { value: "cursor", label: "Cursor", available: false },
 ];
@@ -43,6 +44,22 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+}
+
+export interface SubagentCardSnapshot {
+  childSessionId: string;
+  parentSessionId?: string;
+  title: string;
+  status: "running" | "completed" | "failed";
+  inputText?: string;
+  outputText?: string;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface SubagentTimelineEntryData extends SubagentCardSnapshot {
+  internals: WorkLogEntry[];
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {

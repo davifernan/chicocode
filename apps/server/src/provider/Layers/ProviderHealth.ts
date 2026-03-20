@@ -9,6 +9,7 @@
  * @module ProviderHealthLive
  */
 import * as OS from "node:os";
+import * as NodePath from "node:path";
 import type {
   ServerProviderAuthStatus,
   ServerProviderStatus,
@@ -23,9 +24,12 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
+import { OpenCodeAuthManager } from "../../opencode/OpenCodeAuthManager";
+import { openCodeServerControl } from "../../opencode/OpenCodeProcessManager.ts";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
+const OPENCODE_PROVIDER = "opencode" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 
 // ── Pure helpers ────────────────────────────────────────────────────
@@ -587,14 +591,165 @@ export const checkClaudeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── OpenCode helpers ────────────────────────────────────────────────
+
+function getExecutableCandidates(name: string): ReadonlyArray<string> {
+  if (process.platform !== "win32") {
+    return [name];
+  }
+  const pathExt = process.env.PATHEXT?.split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0) ?? [".exe", ".cmd", ".bat"];
+  return [name, ...pathExt.map((ext) => `${name}${ext.toLowerCase()}`)];
+}
+
+function getPathSearchDirectories(): ReadonlyArray<string> {
+  const rawPath = process.env.PATH;
+  if (!rawPath) return [];
+  return rawPath
+    .split(NodePath.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index);
+}
+
+function getOpenCodeBinaryCandidates(path: Path.Path): ReadonlyArray<string> {
+  const homeDir = OS.homedir();
+  const candidates = new Set<string>();
+  for (const directory of getPathSearchDirectories()) {
+    for (const executable of getExecutableCandidates("opencode")) {
+      candidates.add(path.join(directory, executable));
+    }
+  }
+  for (const knownPath of [
+    path.join(homeDir, ".local", "bin", "opencode"),
+    path.join(homeDir, "go", "bin", "opencode"),
+    "/usr/local/bin/opencode",
+    "/opt/homebrew/bin/opencode",
+  ]) {
+    candidates.add(knownPath);
+  }
+  return [...candidates];
+}
+
+// ── OpenCode health check ───────────────────────────────────────────
+
+export const checkOpenCodeProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  FileSystem.FileSystem | Path.Path
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+  const openCodeStatus = yield* Effect.tryPromise({
+    try: () => openCodeServerControl.refreshStatus(),
+    catch: () => openCodeServerControl.getStatus(),
+  }).pipe(Effect.orElseSucceed(() => openCodeServerControl.getStatus()));
+
+  const credentials = openCodeServerControl.getCredentials();
+  const serverUrl = credentials.url;
+  const username = credentials.username;
+  const password = credentials.password;
+
+  const healthProbe = yield* Effect.tryPromise({
+    try: async () => {
+      const authHeader = `Basic ${btoa(`${username}:${password}`)}`;
+      const resp = await globalThis.fetch(`${serverUrl}/global/health`, {
+        method: "GET",
+        headers: { Authorization: authHeader },
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+      if (!resp.ok) return { healthy: false, reachable: true };
+      try {
+        const body = (await resp.json()) as { healthy?: boolean; version?: string };
+        return { healthy: body.healthy === true, reachable: true, version: body.version };
+      } catch {
+        return { healthy: true, reachable: true };
+      }
+    },
+    catch: () => ({ healthy: false, reachable: false }),
+  }).pipe(Effect.orElseSucceed(() => ({ healthy: false, reachable: false }) as const));
+
+  const authManager = new OpenCodeAuthManager();
+  const authStatus = yield* Effect.tryPromise({
+    try: () => authManager.getAuthStatus(),
+    catch: () => "unknown" as const,
+  }).pipe(Effect.orElseSucceed(() => "unknown" as const));
+
+  if (!healthProbe.reachable) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    let binaryFound = false;
+    for (const binPath of getOpenCodeBinaryCandidates(path)) {
+      const exists = yield* fileSystem.exists(binPath).pipe(Effect.orElseSucceed(() => false));
+      if (exists) {
+        binaryFound = true;
+        break;
+      }
+    }
+    if (!binaryFound) {
+      return {
+        provider: OPENCODE_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+        checkedAt,
+        message:
+          "OpenCode server is not running and the `opencode` binary was not found on PATH or in common locations.",
+      };
+    }
+    return {
+      provider: OPENCODE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+      checkedAt,
+      message: "OpenCode binary found but server is not running. It will be started on first use.",
+    };
+  }
+
+  if (!healthProbe.healthy) {
+    return {
+      provider: OPENCODE_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: authStatus === "authenticated" ? "authenticated" : "unknown",
+      checkedAt,
+      message:
+        openCodeStatus.state === "error"
+          ? openCodeStatus.message
+          : "OpenCode server is reachable but reports unhealthy.",
+    };
+  }
+
+  const authStatusFinal: ServerProviderAuthStatus =
+    authStatus === "authenticated"
+      ? "authenticated"
+      : authStatus === "unauthenticated"
+        ? "unauthenticated"
+        : "unknown";
+  return {
+    provider: OPENCODE_PROVIDER,
+    status: authStatusFinal === "unauthenticated" ? ("warning" as const) : ("ready" as const),
+    available: true,
+    authStatus: authStatusFinal,
+    checkedAt,
+    ...(authStatusFinal === "unauthenticated"
+      ? {
+          message:
+            "OpenCode server is running but no valid authentication entries found in auth.json.",
+        }
+      : {}),
+  } satisfies ServerProviderStatus;
+});
+
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const statusesFiber = yield* Effect.all([checkCodexProviderStatus, checkClaudeProviderStatus], {
-      concurrency: "unbounded",
-    }).pipe(Effect.forkScoped);
+    const statusesFiber = yield* Effect.all(
+      [checkCodexProviderStatus, checkOpenCodeProviderStatus, checkClaudeProviderStatus],
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkScoped);
 
     return {
       getStatuses: Fiber.join(statusesFiber),

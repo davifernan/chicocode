@@ -11,6 +11,9 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL = "desktop:open-or-focus-dev-logs-popout";
+const OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL = "desktop:open-or-focus-dev-server-preview";
+const UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL = "desktop:update-dev-server-preview-url";
 const wsUrl = process.env.T3CODE_DESKTOP_WS_URL ?? null;
 
 contextBridge.exposeInMainWorld("desktopBridge", {
@@ -34,6 +37,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getUpdateState: () => ipcRenderer.invoke(UPDATE_GET_STATE_CHANNEL),
   downloadUpdate: () => ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL),
   installUpdate: () => ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL),
+  openOrFocusDevLogsPopout: () => ipcRenderer.invoke(OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL),
+  openOrFocusDevServerPreview: (targetUrl: string) =>
+    ipcRenderer.invoke(OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL, targetUrl),
+  updateDevServerPreviewUrl: (targetUrl: string | null) =>
+    ipcRenderer.invoke(UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL, targetUrl),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;

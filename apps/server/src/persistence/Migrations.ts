@@ -27,6 +27,11 @@ import Migration0012 from "./Migrations/012_ProjectionThreadsInteractionMode.ts"
 import Migration0013 from "./Migrations/013_ProjectionThreadProposedPlans.ts";
 import Migration0014 from "./Migrations/014_ProjectionThreadProposedPlanImplementation.ts";
 import Migration0015 from "./Migrations/015_ProjectionTurnsSourceProposedPlan.ts";
+import Migration0016 from "./Migrations/016_ProviderBindings.ts";
+import Migration0017 from "./Migrations/017_UiState.ts";
+import Migration0018 from "./Migrations/018_ProviderThreadCatalogMirrorState.ts";
+import Migration0019 from "./Migrations/019_SyncCursors.ts";
+import Migration0020 from "./Migrations/020_DevServerPids.ts";
 import { Effect } from "effect";
 
 /**
@@ -55,6 +60,11 @@ const loader = Migrator.fromRecord({
   "13_ProjectionThreadProposedPlans": Migration0013,
   "14_ProjectionThreadProposedPlanImplementation": Migration0014,
   "15_ProjectionTurnsSourceProposedPlan": Migration0015,
+  "16_ProviderBindings": Migration0016,
+  "17_UiState": Migration0017,
+  "18_ProviderThreadCatalogMirrorState": Migration0018,
+  "19_SyncCursors": Migration0019,
+  "20_DevServerPids": Migration0020,
 });
 
 /**

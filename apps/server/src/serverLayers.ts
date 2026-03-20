@@ -10,6 +10,8 @@ import { ServerConfig } from "./config";
 import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
+import { ProviderThreadCatalogRepositoryLive } from "./persistence/Layers/ProviderThreadCatalog";
+import { UiStateRepositoryLive } from "./persistence/Layers/UiState";
 import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
@@ -21,6 +23,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderUnsupportedError } from "./provider/Errors";
 import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
+import { makeOpenCodeAdapterLive } from "./provider/Layers/OpenCodeAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
@@ -30,6 +33,7 @@ import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
 import { TerminalManagerLive } from "./terminal/Layers/Manager";
 import { KeybindingsLive } from "./keybindings";
 import { GitManagerLive } from "./git/Layers/GitManager";
+import { RemoteHostServiceLive } from "./remoteHost/Layers/RemoteHostService";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationLive } from "./git/Layers/CodexTextGeneration";
@@ -37,6 +41,8 @@ import { GitServiceLive } from "./git/Layers/GitService";
 import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
 import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { SyncCursorRepositoryLive } from "./persistence/Layers/SyncCursor";
+import { SyncServiceLive } from "./sync/SyncService";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService,
@@ -59,11 +65,13 @@ export function makeServerProviderLayer(): Layer.Layer<
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const openCodeAdapterLayer = makeOpenCodeAdapterLive();
     const claudeAdapterLayer = makeClaudeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
+      Layer.provide(openCodeAdapterLayer),
       Layer.provide(claudeAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
@@ -126,11 +134,21 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(textGenerationLayer),
   );
 
+  const syncLayer = SyncServiceLive.pipe(
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(SyncCursorRepositoryLive),
+  );
+
   return Layer.mergeAll(
     orchestrationReactorLayer,
     gitCoreLayer,
     gitManagerLayer,
     terminalLayer,
+    ProviderThreadCatalogRepositoryLive,
+    UiStateRepositoryLive,
     KeybindingsLive,
+    RemoteHostServiceLive,
+    SyncCursorRepositoryLive,
+    syncLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

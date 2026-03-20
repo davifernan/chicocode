@@ -31,8 +31,12 @@ export function buildLocalDraftThread(
     interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
+    messageCount: 0,
+    latestMessageAt: null,
+    messagesHydrated: true,
     error,
     createdAt: draftThread.createdAt,
+    updatedAt: draftThread.createdAt,
     latestTurn: null,
     lastVisitedAt: draftThread.createdAt,
     branch: draftThread.branch,
@@ -123,10 +127,12 @@ export function cloneComposerImageForRetry(
 
 export function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customOpenCodeModels: readonly string[];
   customClaudeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    opencode: getAppModelOptions("opencode", settings.customOpenCodeModels),
     claudeAgent: getAppModelOptions("claudeAgent", settings.customClaudeModels),
   };
 }

@@ -4,7 +4,8 @@ import "../index.css";
 import {
   ORCHESTRATION_WS_METHODS,
   type MessageId,
-  type OrchestrationReadModel,
+  type OrchestrationSummaryReadModel,
+  type OrchestrationThreadMessagesResult,
   type ProjectId,
   type ServerConfig,
   type ThreadId,
@@ -46,7 +47,8 @@ interface WsRequestEnvelope {
 }
 
 interface TestFixture {
-  snapshot: OrchestrationReadModel;
+  snapshot: OrchestrationSummaryReadModel;
+  threadMessages: Record<ThreadId, OrchestrationThreadMessagesResult>;
   serverConfig: ServerConfig;
   welcome: WsWelcomePayload;
 }
@@ -178,8 +180,8 @@ function createSnapshotForTargetUser(options: {
   targetText: string;
   targetAttachmentCount?: number;
   sessionStatus?: OrchestrationSessionStatus;
-}): OrchestrationReadModel {
-  const messages: Array<OrchestrationReadModel["threads"][number]["messages"][number]> = [];
+}): TestFixture {
+  const messages: Array<OrchestrationThreadMessagesResult["messages"][number]> = [];
 
   for (let index = 0; index < 22; index += 1) {
     const isTarget = index === 3;
@@ -214,55 +216,60 @@ function createSnapshotForTargetUser(options: {
   }
 
   return {
-    snapshotSequence: 1,
-    projects: [
-      {
-        id: PROJECT_ID,
-        title: "Project",
-        workspaceRoot: "/repo/project",
-        defaultModel: "gpt-5",
-        scripts: [],
-        createdAt: NOW_ISO,
-        updatedAt: NOW_ISO,
-        deletedAt: null,
-      },
-    ],
-    threads: [
-      {
-        id: THREAD_ID,
-        projectId: PROJECT_ID,
-        title: "Browser test thread",
-        model: "gpt-5",
-        interactionMode: "default",
-        runtimeMode: "full-access",
-        branch: "main",
-        worktreePath: null,
-        latestTurn: null,
-        createdAt: NOW_ISO,
-        updatedAt: NOW_ISO,
-        deletedAt: null,
-        messages,
-        activities: [],
-        proposedPlans: [],
-        checkpoints: [],
-        session: {
-          threadId: THREAD_ID,
-          status: options.sessionStatus ?? "ready",
-          providerName: "codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
+    snapshot: {
+      snapshotSequence: 1,
+      projects: [
+        {
+          id: PROJECT_ID,
+          title: "Project",
+          workspaceRoot: "/repo/project",
+          defaultModel: "gpt-5",
+          scripts: [],
+          createdAt: NOW_ISO,
           updatedAt: NOW_ISO,
+          deletedAt: null,
         },
+      ],
+      threads: [
+        {
+          id: THREAD_ID,
+          projectId: PROJECT_ID,
+          title: "Browser test thread",
+          model: "gpt-5",
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: "main",
+          worktreePath: null,
+          latestTurn: null,
+          createdAt: NOW_ISO,
+          updatedAt: NOW_ISO,
+          deletedAt: null,
+          messageCount: messages.length,
+          latestMessageAt: messages[messages.length - 1]?.updatedAt ?? null,
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          session: {
+            threadId: THREAD_ID,
+            status: options.sessionStatus ?? "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW_ISO,
+          },
+        },
+      ],
+      updatedAt: NOW_ISO,
+    },
+    threadMessages: {
+      [THREAD_ID]: {
+        threadId: THREAD_ID,
+        messageCount: messages.length,
+        latestMessageAt: messages[messages.length - 1]?.updatedAt ?? null,
+        messages,
       },
-    ],
-    updatedAt: NOW_ISO,
-  };
-}
-
-function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
-  return {
-    snapshot,
+    },
     serverConfig: createBaseServerConfig(),
     welcome: {
       cwd: "/repo/project",
@@ -274,9 +281,9 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
 }
 
 function addThreadToSnapshot(
-  snapshot: OrchestrationReadModel,
+  snapshot: OrchestrationSummaryReadModel,
   threadId: ThreadId,
-): OrchestrationReadModel {
+): OrchestrationSummaryReadModel {
   return {
     ...snapshot,
     snapshotSequence: snapshot.snapshotSequence + 1,
@@ -295,7 +302,8 @@ function addThreadToSnapshot(
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
         deletedAt: null,
-        messages: [],
+        messageCount: 0,
+        latestMessageAt: null,
         activities: [],
         proposedPlans: [],
         checkpoints: [],
@@ -313,18 +321,22 @@ function addThreadToSnapshot(
   };
 }
 
-function createDraftOnlySnapshot(): OrchestrationReadModel {
+function createDraftOnlySnapshot(): TestFixture {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-draft-target" as MessageId,
     targetText: "draft thread",
   });
   return {
     ...snapshot,
-    threads: [],
+    snapshot: {
+      ...snapshot.snapshot,
+      threads: [],
+    },
+    threadMessages: {},
   };
 }
 
-function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
+function createSnapshotWithLongProposedPlan(): TestFixture {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-plan-target" as MessageId,
     targetText: "plan thread",
@@ -360,24 +372,27 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
 
   return {
     ...snapshot,
-    threads: snapshot.threads.map((thread) =>
-      thread.id === THREAD_ID
-        ? Object.assign({}, thread, {
-            proposedPlans: [
-              {
-                id: "plan-browser-test",
-                turnId: null,
-                planMarkdown,
-                implementedAt: null,
-                implementationThreadId: null,
-                createdAt: isoAt(1_000),
-                updatedAt: isoAt(1_001),
-              },
-            ],
-            updatedAt: isoAt(1_001),
-          })
-        : thread,
-    ),
+    snapshot: {
+      ...snapshot.snapshot,
+      threads: snapshot.snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID
+          ? Object.assign({}, thread, {
+              proposedPlans: [
+                {
+                  id: "plan-browser-test",
+                  turnId: null,
+                  planMarkdown,
+                  implementedAt: null,
+                  implementationThreadId: null,
+                  createdAt: isoAt(1_000),
+                  updatedAt: isoAt(1_001),
+                },
+              ],
+              updatedAt: isoAt(1_001),
+            })
+          : thread,
+      ),
+    },
   };
 }
 
@@ -386,8 +401,25 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
   }
+  if (tag === ORCHESTRATION_WS_METHODS.getThreadMessages) {
+    const threadId = (typeof body.threadId === "string" ? body.threadId : THREAD_ID) as ThreadId;
+    return (
+      fixture.threadMessages[threadId] ?? {
+        threadId,
+        messageCount: 0,
+        latestMessageAt: null,
+        messages: [],
+      }
+    );
+  }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
+  }
+  if (tag === WS_METHODS.serverGetUiState) {
+    return { valueJson: null };
+  }
+  if (tag === WS_METHODS.serverUpsertUiState) {
+    return undefined;
   }
   if (tag === WS_METHODS.gitListBranches) {
     return {
@@ -662,10 +694,10 @@ async function measureUserRow(options: {
 
 async function mountChatView(options: {
   viewport: ViewportSpec;
-  snapshot: OrchestrationReadModel;
+  snapshot: TestFixture;
   configureFixture?: (fixture: TestFixture) => void;
 }): Promise<MountedChatView> {
-  fixture = buildFixture(options.snapshot);
+  fixture = options.snapshot;
   options.configureFixture?.(fixture);
   await setViewport(options.viewport);
   await waitForProductionStyles();
@@ -706,7 +738,7 @@ async function mountChatView(options: {
 }
 
 async function measureUserRowAtViewport(options: {
-  snapshot: OrchestrationReadModel;
+  snapshot: TestFixture;
   targetMessageId: MessageId;
   viewport: ViewportSpec;
 }): Promise<UserRowMeasurement> {
@@ -724,12 +756,10 @@ async function measureUserRowAtViewport(options: {
 
 describe("ChatView timeline estimator parity (full app)", () => {
   beforeAll(async () => {
-    fixture = buildFixture(
-      createSnapshotForTargetUser({
-        targetMessageId: "msg-user-bootstrap" as MessageId,
-        targetText: "bootstrap",
-      }),
-    );
+    fixture = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-bootstrap" as MessageId,
+      targetText: "bootstrap",
+    });
     await worker.start({
       onUnhandledRequest: "bypass",
       quiet: true,

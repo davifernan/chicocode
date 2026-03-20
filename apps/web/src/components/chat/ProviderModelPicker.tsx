@@ -63,6 +63,7 @@ function resolveModelForProviderPicker(
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
+  opencode: OpenCodeIcon,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
 };

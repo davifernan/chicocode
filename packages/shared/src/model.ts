@@ -16,8 +16,9 @@ import {
 } from "@t3tools/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
-  claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
+  opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
+  claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
 };
 
 const CLAUDE_OPUS_4_6_MODEL = "claude-opus-4-6";
@@ -107,6 +108,11 @@ export function inferProviderForModel(
     return "claudeAgent";
   }
 
+  const normalizedOpencode = normalizeModelSlug(model, "opencode");
+  if (normalizedOpencode && MODEL_SLUG_SET_BY_PROVIDER.opencode.has(normalizedOpencode)) {
+    return "opencode";
+  }
+
   const normalizedCodex = normalizeModelSlug(model, "codex");
   if (normalizedCodex && MODEL_SLUG_SET_BY_PROVIDER.codex.has(normalizedCodex)) {
     return "codex";
@@ -116,6 +122,9 @@ export function inferProviderForModel(
 }
 
 export function getReasoningEffortOptions(provider: "codex"): ReadonlyArray<CodexReasoningEffort>;
+export function getReasoningEffortOptions(
+  provider: "opencode",
+): ReadonlyArray<CodexReasoningEffort>;
 export function getReasoningEffortOptions(
   provider: "claudeAgent",
   model?: string | null | undefined,
@@ -141,16 +150,21 @@ export function getReasoningEffortOptions(
 }
 
 export function getDefaultReasoningEffort(provider: "codex"): CodexReasoningEffort;
+export function getDefaultReasoningEffort(provider: "opencode"): CodexReasoningEffort | null;
 export function getDefaultReasoningEffort(provider: "claudeAgent"): ClaudeCodeEffort;
-export function getDefaultReasoningEffort(provider?: ProviderKind): ProviderReasoningEffort;
+export function getDefaultReasoningEffort(provider?: ProviderKind): ProviderReasoningEffort | null;
 export function getDefaultReasoningEffort(
   provider: ProviderKind = "codex",
-): ProviderReasoningEffort {
+): ProviderReasoningEffort | null {
   return DEFAULT_REASONING_EFFORT_BY_PROVIDER[provider];
 }
 
 export function resolveReasoningEffortForProvider(
   provider: "codex",
+  effort: string | null | undefined,
+): CodexReasoningEffort | null;
+export function resolveReasoningEffortForProvider(
+  provider: "opencode",
   effort: string | null | undefined,
 ): CodexReasoningEffort | null;
 export function resolveReasoningEffortForProvider(

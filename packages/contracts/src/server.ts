@@ -55,6 +55,29 @@ export const ServerConfig = Schema.Struct({
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
+export const ServerUiStateKey = Schema.Literals([
+  "appSettings",
+  "rendererState",
+  "remoteHostConfig",
+]);
+export type ServerUiStateKey = typeof ServerUiStateKey.Type;
+
+export const ServerGetUiStateInput = Schema.Struct({
+  key: ServerUiStateKey,
+});
+export type ServerGetUiStateInput = typeof ServerGetUiStateInput.Type;
+
+export const ServerGetUiStateResult = Schema.Struct({
+  valueJson: Schema.NullOr(Schema.String),
+});
+export type ServerGetUiStateResult = typeof ServerGetUiStateResult.Type;
+
+export const ServerUpsertUiStateInput = Schema.Struct({
+  key: ServerUiStateKey,
+  valueJson: Schema.String,
+});
+export type ServerUpsertUiStateInput = typeof ServerUpsertUiStateInput.Type;
+
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 

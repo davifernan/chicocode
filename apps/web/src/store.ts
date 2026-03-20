@@ -3,8 +3,9 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   type ProviderKind,
   ThreadId,
-  type OrchestrationReadModel,
+  type OrchestrationSummaryReadModel,
   type OrchestrationSessionStatus,
+  type DevServerInfo,
 } from "@t3tools/contracts";
 import {
   inferProviderForModel,
@@ -21,6 +22,8 @@ export interface AppState {
   projects: Project[];
   threads: Thread[];
   threadsHydrated: boolean;
+  devServerByProjectId: Record<string, DevServerInfo>;
+  devServerLogsByProjectId: Record<string, string[]>;
 }
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
@@ -40,6 +43,8 @@ const initialState: AppState = {
   projects: [],
   threads: [],
   threadsHydrated: false,
+  devServerByProjectId: {},
+  devServerLogsByProjectId: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -117,7 +122,7 @@ function updateThread(
 }
 
 function mapProjectsFromReadModel(
-  incoming: OrchestrationReadModel["projects"],
+  incoming: OrchestrationSummaryReadModel["projects"],
   previous: Project[],
 ): Project[] {
   const previousById = new Map(previous.map((project) => [project.id, project] as const));
@@ -188,7 +193,7 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent") {
+  if (providerName === "codex" || providerName === "opencode" || providerName === "claudeAgent") {
     return providerName;
   }
   return "codex";
@@ -198,7 +203,11 @@ function inferProviderForThreadModel(input: {
   readonly model: string;
   readonly sessionProviderName: string | null;
 }): ProviderKind {
-  if (input.sessionProviderName === "codex" || input.sessionProviderName === "claudeAgent") {
+  if (
+    input.sessionProviderName === "codex" ||
+    input.sessionProviderName === "opencode" ||
+    input.sessionProviderName === "claudeAgent"
+  ) {
     return input.sessionProviderName;
   }
   return inferProviderForModel(input.model);
@@ -238,7 +247,10 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
 
 // ── Pure state transition functions ────────────────────────────────────
 
-export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
+export function syncServerReadModel(
+  state: AppState,
+  readModel: OrchestrationSummaryReadModel,
+): AppState {
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
@@ -253,6 +265,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         codexThreadId: null,
         projectId: thread.projectId,
         title: thread.title,
+        starred: existing?.starred,
         model: resolveModelSlugForProvider(
           inferProviderForThreadModel({
             model: thread.model,
@@ -273,26 +286,19 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
               ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
             }
           : null,
-        messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
-          const normalizedMessage: ChatMessage = {
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            createdAt: message.createdAt,
-            streaming: message.streaming,
-            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          };
-          return normalizedMessage;
-        }),
+        messages:
+          existing &&
+          existing.messageCount === thread.messageCount &&
+          existing.latestMessageAt === thread.latestMessageAt
+            ? existing.messages
+            : (existing?.messages ?? []),
+        messageCount: thread.messageCount,
+        latestMessageAt: thread.latestMessageAt,
+        messagesHydrated:
+          thread.messageCount === 0 ||
+          (existing?.messagesHydrated === true &&
+            existing.messageCount === thread.messageCount &&
+            existing.latestMessageAt === thread.latestMessageAt),
         proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
           id: proposedPlan.id,
           turnId: proposedPlan.turnId,
@@ -304,6 +310,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         })),
         error: thread.session?.lastError ?? null,
         createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
         branch: thread.branch,
@@ -428,7 +435,7 @@ export function setThreadBranch(
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
-  syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  syncServerReadModel: (readModel: OrchestrationSummaryReadModel) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;

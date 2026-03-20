@@ -3,7 +3,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
-  type OrchestrationReadModel,
+  type OrchestrationSummaryReadModel,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -21,11 +21,15 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
     messages: [],
+    messageCount: 0,
+    latestMessageAt: null,
+    messagesHydrated: true,
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
     error: null,
     createdAt: "2026-02-13T00:00:00.000Z",
+    updatedAt: "2026-02-13T00:00:00.000Z",
     latestTurn: null,
     branch: null,
     worktreePath: null,
@@ -47,10 +51,12 @@ function makeState(thread: Thread): AppState {
     ],
     threads: [thread],
     threadsHydrated: true,
+    devServerByProjectId: {},
+    devServerLogsByProjectId: {},
   };
 }
 
-function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"][number]>) {
+function makeReadModelThread(overrides: Partial<OrchestrationSummaryReadModel["threads"][number]>) {
   return {
     id: ThreadId.makeUnsafe("thread-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
@@ -64,16 +70,19 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
     deletedAt: null,
-    messages: [],
+    messageCount: 0,
+    latestMessageAt: null,
     activities: [],
     proposedPlans: [],
     checkpoints: [],
     session: null,
     ...overrides,
-  } satisfies OrchestrationReadModel["threads"][number];
+  } satisfies OrchestrationSummaryReadModel["threads"][number];
 }
 
-function makeReadModel(thread: OrchestrationReadModel["threads"][number]): OrchestrationReadModel {
+function makeReadModel(
+  thread: OrchestrationSummaryReadModel["threads"][number],
+): OrchestrationSummaryReadModel {
   return {
     snapshotSequence: 1,
     updatedAt: "2026-02-27T00:00:00.000Z",
@@ -94,8 +103,8 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
 }
 
 function makeReadModelProject(
-  overrides: Partial<OrchestrationReadModel["projects"][number]>,
-): OrchestrationReadModel["projects"][number] {
+  overrides: Partial<OrchestrationSummaryReadModel["projects"][number]>,
+): OrchestrationSummaryReadModel["projects"][number] {
   return {
     id: ProjectId.makeUnsafe("project-1"),
     title: "Project",
@@ -182,6 +191,8 @@ describe("store pure functions", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
 
     const next = reorderProjects(state, project1, project3);
@@ -251,8 +262,10 @@ describe("store read model sync", () => {
       ],
       threads: [],
       threadsHydrated: true,
+      devServerByProjectId: {},
+      devServerLogsByProjectId: {},
     };
-    const readModel: OrchestrationReadModel = {
+    const readModel: OrchestrationSummaryReadModel = {
       snapshotSequence: 2,
       updatedAt: "2026-02-27T00:00:00.000Z",
       projects: [
