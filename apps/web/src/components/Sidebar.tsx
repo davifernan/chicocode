@@ -37,7 +37,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { resolveAppModelSelection } from "../appSettings";
 import { isElectron } from "../env";
@@ -123,6 +123,28 @@ function formatRelativeTime(timestamp: number, now: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * Isolated relative-time label for a single thread item.
+ *
+ * Owns a 60 s interval so only this tiny component re-renders on each tick,
+ * not the entire 2 000-line Sidebar tree.
+ */
+function ThreadRelativeTime({ thread }: { thread: Thread }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!shouldShowThreadRelativeTime(thread)) return null;
+  return (
+    <span className="shrink-0 text-[10px] text-muted-foreground/40">
+      {formatRelativeTime(getThreadLastActivityTime(thread), now)}
+    </span>
+  );
 }
 
 interface TerminalStatusIndicator {
@@ -278,6 +300,7 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const navigate = useNavigate();
+  const router = useRouter();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const { settings: appSettings } = useAppSettings();
   const defaultProjectModel = useMemo(
@@ -337,7 +360,6 @@ export default function Sidebar() {
     setSettingsSection(section);
     setIsSettingsOpen(true);
   }, []);
-  const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -346,16 +368,6 @@ export default function Sidebar() {
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const shouldBrowseForProjectImmediately = isElectron;
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setRelativeTimeNow(Date.now());
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, []);
 
   const pendingApprovalByThreadId = useMemo(() => {
     const map = new Map<ThreadId, boolean>();
@@ -1702,13 +1714,6 @@ export default function Sidebar() {
                                   selectThreadTerminalState(terminalStateByThreadId, thread.id)
                                     .runningTerminalIds,
                                 );
-                                const showRelativeTime = shouldShowThreadRelativeTime(thread);
-                                const relativeTimeLabel = showRelativeTime
-                                  ? formatRelativeTime(
-                                      getThreadLastActivityTime(thread),
-                                      relativeTimeNow,
-                                    )
-                                  : null;
 
                                 return (
                                   <SidebarMenuSubItem
@@ -1724,6 +1729,13 @@ export default function Sidebar() {
                                         isActive,
                                         isSelected,
                                       })}
+                                      onMouseEnter={() => {
+                                        // Preload the lazy ChatView chunk before the user clicks.
+                                        void router.preloadRoute({
+                                          to: "/$threadId",
+                                          params: { threadId: thread.id },
+                                        });
+                                      }}
                                       onClick={(event) => {
                                         handleThreadClick(
                                           event,
@@ -1894,17 +1906,7 @@ export default function Sidebar() {
                                             </span>
                                           </span>
                                         ) : (
-                                          relativeTimeLabel && (
-                                            <span
-                                              className={`min-w-11 text-[10px] transition-colors duration-200 ${
-                                                isHighlighted
-                                                  ? "text-foreground/65"
-                                                  : "text-muted-foreground/40"
-                                              }`}
-                                            >
-                                              {relativeTimeLabel}
-                                            </span>
-                                          )
+                                          <ThreadRelativeTime thread={thread} />
                                         )}
                                       </div>
                                     </SidebarMenuSubButton>

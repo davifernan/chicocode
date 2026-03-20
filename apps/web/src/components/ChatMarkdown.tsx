@@ -6,6 +6,7 @@ import React, {
   isValidElement,
   use,
   useCallback,
+  useDeferredValue,
   memo,
   useEffect,
   useMemo,
@@ -240,6 +241,10 @@ function SuspenseShikiCodeBlock({
 }
 
 function ChatMarkdown({ text, cwd, isStreaming = false, variant = "default" }: ChatMarkdownProps) {
+  // Defer markdown re-parsing during streaming so user interactions (typing in composer,
+  // scrolling) stay responsive. React processes them at high priority; markdown re-render
+  // is low-priority and catches up when the main thread is idle.
+  const deferredText = useDeferredValue(text);
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownComponents = useMemo<Components>(
@@ -300,7 +305,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false, variant = "default" }: C
       )}
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {text}
+        {deferredText}
       </ReactMarkdown>
     </div>
   );

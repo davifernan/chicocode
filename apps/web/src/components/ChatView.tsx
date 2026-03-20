@@ -96,6 +96,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
+  ClockIcon,
   ListTodoIcon,
   LockIcon,
   LockOpenIcon,
@@ -151,6 +152,8 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { ChatViewMessagesSkeleton } from "./ChatViewSkeleton";
+import { ComposerQueueDock, type QueuedMessage } from "./chat/ComposerQueueDock";
 import { ChatHeader, type RightPanelMode } from "./chat/ChatHeader";
 import { DevLogsPanel } from "./chat/DevLogsPanel";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -416,7 +419,9 @@ interface ChatViewProps {
 }
 
 export default function ChatView({ threadId }: ChatViewProps) {
-  const threads = useStore((store) => store.threads);
+  // Narrow to just the active thread so domain-events for other threads
+  // don't trigger a ChatView re-render.
+  const serverThread = useStore((store) => store.threads.find((t) => t.id === threadId) ?? null);
   const projects = useStore((store) => store.projects);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
@@ -505,6 +510,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  // Messages queued while the LLM is actively running a turn.
+  // Auto-drained FIFO once the turn completes.
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  // Set to true when the user explicitly interrupts a running turn.
+  // The auto-send effect checks this: instead of sending, it restores queue
+  // content back to the composer so the user has to manually confirm.
+  const wasInterruptedRef = useRef(false);
+
+  // Latched "ever hydrated" flag — starts false, latched to true the first
+  // time messagesHydrated is seen as true for this thread. Stays true for the
+  // lifetime of this ChatView mount (reset on thread switch via key={threadId}).
+  // Prevents the messages skeleton from flashing back during snapshot syncs
+  // that temporarily reset messagesHydrated=false while a turn is in progress.
+  const messagesEverHydratedRef = useRef(false);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
@@ -537,7 +556,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
   // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
-  const [nowTick, setNowTick] = useState(() => Date.now());
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -653,7 +671,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [composerTerminalContexts, removeComposerDraftTerminalContext, setPrompt, threadId],
   );
 
-  const serverThread = threads.find((t) => t.id === threadId);
   const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
   const localDraftError = serverThread ? null : (localDraftErrorsByThreadId[threadId] ?? null);
   const localDraftThread = useMemo(
@@ -669,6 +686,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.model, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+
+  // Latch: once messagesHydrated is true for this thread, keep it true for
+  // the lifetime of this ChatView mount so snapshot syncs can't flash the skeleton.
+  if (activeThread?.messagesHydrated) {
+    messagesEverHydratedRef.current = true;
+  }
+
   const activeOpenCodeThreadMetadata =
     activeThread &&
     (activeThread.provider === "opencode" || activeThread.session?.provider === "opencode")
@@ -1093,7 +1117,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const isSendBusy = sendPhase !== "idle";
   const isPreparingWorktree = sendPhase === "preparing-worktree";
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
-  const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -1676,7 +1699,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
-      if (threads.some((thread) => thread.id === targetThreadId)) {
+      // Read threads imperatively to avoid a broad subscription on the whole array.
+      if (useStore.getState().threads.some((thread) => thread.id === targetThreadId)) {
         setStoreThreadError(targetThreadId, error);
         return;
       }
@@ -1690,7 +1714,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         };
       });
     },
-    [setStoreThreadError, threads],
+    [setStoreThreadError],
   );
 
   const focusComposer = useCallback(() => {
@@ -2624,17 +2648,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       ? (draftThread?.envMode ?? "local")
       : "local";
 
-  useEffect(() => {
-    if (!isWorking) return;
-    setNowTick(Date.now());
-    const timer = window.setInterval(() => {
-      setNowTick(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [isWorking]);
-
   const beginSendPhase = useCallback((nextPhase: Exclude<SendPhase, "idle">) => {
     setSendStartedAt((current) => current ?? new Date().toISOString());
     setSendPhase(nextPhase);
@@ -3002,6 +3015,43 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return;
     }
     if (!activeProject) return;
+
+    // If the LLM is actively running a turn and this is an existing server thread,
+    // queue the message instead of sending it immediately. It will auto-send FIFO
+    // once the current turn completes. We do NOT queue: first messages, local draft
+    // threads (no thread ID yet), plan follow-ups, slash commands, or approval flows
+    // (those are already handled above).
+    const isFollowUpOnRunningTurn =
+      phase === "running" &&
+      !isSendBusy &&
+      !isConnecting &&
+      isServerThread &&
+      !showPlanFollowUpPrompt;
+    if (isFollowUpOnRunningTurn) {
+      // Compute text + preview at queue-time (same as the real send would do).
+      const queueText = appendTerminalContextsToPrompt(promptForSend, [
+        ...sendableComposerTerminalContexts,
+      ]);
+      const preview =
+        trimmed
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .find((l) => l.length > 0) ?? "";
+      setQueuedMessages((existing) => [
+        ...existing,
+        {
+          id: newMessageId(),
+          text: queueText,
+          preview,
+        },
+      ]);
+      promptRef.current = "";
+      clearComposerDraftContent(activeThread.id);
+      setComposerHighlightedItemId(null);
+      setComposerCursor(0);
+      setComposerTrigger(null);
+      return;
+    }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messageCount === 0;
     const baseBranchForWorktree =
@@ -3272,9 +3322,165 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
   };
 
+  /**
+   * Sends the first item from the queue (called automatically when the LLM
+   * finishes a turn and the queue is non-empty).
+   *
+   * Intentionally does NOT call beginSendPhase / resetSendPhase.
+   * sendPhase is for user-initiated sends from the composer — if we set it here,
+   * it can get stuck as "sending-turn" when the Turn completes faster than the
+   * resetSendPhase effect's phase === "running" check fires. Instead, isWorking
+   * naturally reflects the server phase once the command is dispatched.
+   *
+   * sendInFlightRef.current is enough to prevent concurrent sends.
+   */
+  const sendQueuedMessage = useCallback(
+    async (item: QueuedMessage) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !activeProject || !isServerThread) return;
+      if (sendInFlightRef.current) return;
+
+      sendInFlightRef.current = true;
+
+      const messageCreatedAt = new Date().toISOString();
+      const optimisticMessage: ChatMessage = {
+        id: item.id as MessageId,
+        role: "user",
+        text: item.text,
+        createdAt: messageCreatedAt,
+        streaming: false,
+      };
+
+      setOptimisticUserMessages((existing) => [...existing, optimisticMessage]);
+      shouldAutoScrollRef.current = true;
+      forceStickToBottom();
+
+      try {
+        await persistThreadSettingsForNextTurn({
+          threadId: activeThread.id,
+          createdAt: messageCreatedAt,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          runtimeMode,
+          interactionMode: effectiveInteractionMode,
+        });
+
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          message: {
+            messageId: item.id as MessageId,
+            role: "user",
+            text: item.text || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+            attachments: [],
+          },
+          model: selectedModel || undefined,
+          ...(selectedModelOptionsForDispatch
+            ? { modelOptions: selectedModelOptionsForDispatch }
+            : {}),
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          provider: selectedProvider,
+          assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
+          runtimeMode,
+          interactionMode: effectiveInteractionMode,
+          createdAt: messageCreatedAt,
+        });
+
+        // Eagerly sync so the UI reflects "running" immediately.
+        api.orchestration
+          .getSnapshot()
+          .then((snapshot) => {
+            syncServerReadModel(snapshot);
+          })
+          .catch(() => undefined);
+      } catch (err) {
+        // Roll back the optimistic message on failure.
+        setOptimisticUserMessages((existing) => existing.filter((msg) => msg.id !== item.id));
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to send queued message.",
+        );
+      } finally {
+        sendInFlightRef.current = false;
+      }
+    },
+    [
+      activeProject,
+      activeThread,
+      effectiveInteractionMode,
+      forceStickToBottom,
+      isServerThread,
+      persistThreadSettingsForNextTurn,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider,
+      setThreadError,
+      settings.enableAssistantStreaming,
+      syncServerReadModel,
+    ],
+  );
+
+  // Auto-send: drain the queue FIFO once the current LLM turn completes.
+  // Guards: don't fire while a send is already in flight, while approvals /
+  // user-inputs are blocking, or while the thread still has an error.
+  //
+  // Special case — manual interrupt:
+  //   If the user explicitly aborted the turn (wasInterruptedRef), the queue
+  //   content is restored back to the composer instead of auto-sending.
+  //   All messages are joined with double-newlines so the user can review,
+  //   edit, and press Enter themselves to confirm.
+  useEffect(() => {
+    if (queuedMessages.length === 0) return;
+    if (isWorking) return;
+    if (pendingApprovals.length > 0) return;
+    if (pendingUserInputs.length > 0) return;
+    if (activeThread?.error) return;
+
+    if (wasInterruptedRef.current) {
+      // Restore all queued messages to the composer, joined by double newlines.
+      wasInterruptedRef.current = false;
+      const restoredText = queuedMessages.map((m) => m.text).join("\n\n");
+      setQueuedMessages([]);
+      setPrompt(restoredText);
+      setComposerCursor(restoredText.length);
+      // Focus the composer so the user can immediately review and press Enter.
+      window.requestAnimationFrame(() => focusComposer());
+      return;
+    }
+
+    const [first] = queuedMessages;
+    if (!first) return;
+
+    // Dequeue before sending so clicking "remove" on the next item during
+    // the send doesn't accidentally remove the one being sent.
+    setQueuedMessages((existing) => existing.slice(1));
+    void sendQueuedMessage(first);
+  }, [
+    activeThread?.error,
+    focusComposer,
+    isWorking,
+    pendingApprovals.length,
+    pendingUserInputs.length,
+    queuedMessages,
+    sendQueuedMessage,
+    setPrompt,
+  ]);
+
+  // Clear queue when the user navigates to a different thread.
+  useEffect(() => {
+    setQueuedMessages([]);
+  }, [threadId]);
+
   const onInterrupt = async () => {
     const api = readNativeApi();
     if (!api || !activeThread) return;
+    // If there are queued messages, flag the interrupt so the auto-send effect
+    // restores them to the composer instead of firing them automatically.
+    if (queuedMessages.length > 0) {
+      wasInterruptedRef.current = true;
+    }
     await api.orchestration.dispatchCommand({
       type: "thread.turn.interrupt",
       commandId: newCommandId(),
@@ -4144,30 +4350,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onTouchEnd={onMessagesTouchEnd}
               onTouchCancel={onMessagesTouchEnd}
             >
-              <MessagesTimeline
-                key={activeThread.id}
-                hasMessages={timelineEntries.length > 0}
-                isWorking={isWorking}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
-                activeTurnStartedAt={activeWorkStartedAt}
-                scrollContainer={messagesScrollElement}
-                timelineEntries={timelineEntries}
-                completionDividerBeforeEntryId={null}
-                completionSummary={null}
-                turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                nowIso={nowIso}
-                expandedWorkGroups={expandedWorkGroups}
-                onToggleWorkGroup={onToggleWorkGroup}
-                onOpenTurnDiff={onOpenTurnDiff}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                onRevertUserMessage={onRevertUserMessage}
-                isRevertingCheckpoint={isRevertingCheckpoint}
-                onImageExpand={onExpandTimelineImage}
-                markdownCwd={gitCwd ?? undefined}
-                resolvedTheme={resolvedTheme}
-                timestampFormat={timestampFormat}
-                workspaceRoot={activeProject?.cwd ?? undefined}
-              />
+              {/* Show a skeleton while message history is being fetched for threads that
+                  have existing messages. Uses messagesEverHydratedRef (not the raw
+                  messagesHydrated flag) to avoid the skeleton flashing back during
+                  snapshot syncs that temporarily reset the flag while a turn runs. */}
+              {!messagesEverHydratedRef.current && activeThread.messageCount > 0 ? (
+                <ChatViewMessagesSkeleton />
+              ) : (
+                <MessagesTimeline
+                  key={activeThread.id}
+                  hasMessages={timelineEntries.length > 0}
+                  isWorking={isWorking}
+                  activeTurnInProgress={isWorking || !latestTurnSettled}
+                  activeTurnStartedAt={activeWorkStartedAt}
+                  scrollContainer={messagesScrollElement}
+                  timelineEntries={timelineEntries}
+                  completionDividerBeforeEntryId={null}
+                  completionSummary={null}
+                  turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                  expandedWorkGroups={expandedWorkGroups}
+                  onToggleWorkGroup={onToggleWorkGroup}
+                  onOpenTurnDiff={onOpenTurnDiff}
+                  revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                  onRevertUserMessage={onRevertUserMessage}
+                  isRevertingCheckpoint={isRevertingCheckpoint}
+                  onImageExpand={onExpandTimelineImage}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  timestampFormat={timestampFormat}
+                  workspaceRoot={activeProject?.cwd ?? undefined}
+                />
+              )}
             </div>
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
@@ -4209,7 +4422,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             </div>
           )}
 
-          {/* Input bar */}
+          {/* Input bar — queue dock (if any) sits directly above the composer card,
+              inside the same padding wrapper so they share horizontal alignment
+              and border/radius stitching. */}
           <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
             <form
               ref={composerFormRef}
@@ -4217,10 +4432,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
               className="mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)]"
               data-chat-composer-form="true"
             >
+              {/* Queue dock — rendered inside the form so it shares the same max-width
+                  and sits flush against the composer card (no gap, matched radii). */}
+              {queuedMessages.length > 0 && (
+                <ComposerQueueDock
+                  items={queuedMessages}
+                  isSending={isSendBusy}
+                  onRemove={(id) =>
+                    setQueuedMessages((existing) => existing.filter((m) => m.id !== id))
+                  }
+                />
+              )}
+
               <div
-                className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
-                  isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
-                }`}
+                className={cn(
+                  "group border bg-card transition-colors duration-200 focus-within:border-ring/45",
+                  isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
+                  // When the queue dock is attached above, remove top radius so the two
+                  // elements merge into a single visual panel.
+                  queuedMessages.length > 0 ? "rounded-b-[20px] rounded-t-none" : "rounded-[20px]",
+                )}
                 onDragEnter={onComposerDragEnter}
                 onDragOver={onComposerDragOver}
                 onDragLeave={onComposerDragLeave}
@@ -4640,22 +4871,36 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           </Button>
                         </div>
                       ) : phase === "running" ? (
-                        <button
-                          type="button"
-                          className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
-                          onClick={() => void onInterrupt()}
-                          aria-label="Stop generation"
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 12 12"
-                            fill="currentColor"
-                            aria-hidden="true"
+                        <div className="flex items-center gap-1.5">
+                          {/* Queue button — appears when user has typed content while LLM is running.
+                              Submits the form which routes into the queue path in onSend. */}
+                          {composerSendState.hasSendableContent && (
+                            <button
+                              type="submit"
+                              className="flex size-8 cursor-pointer items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-accent-foreground hover:scale-105 sm:h-8 sm:w-8"
+                              aria-label="Add to queue"
+                            >
+                              <ClockIcon className="size-3.5" />
+                            </button>
+                          )}
+                          {/* Stop button */}
+                          <button
+                            type="button"
+                            className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+                            onClick={() => void onInterrupt()}
+                            aria-label="Stop generation"
                           >
-                            <rect x="2" y="2" width="8" height="8" rx="1.5" />
-                          </svg>
-                        </button>
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 12 12"
+                              fill="currentColor"
+                              aria-hidden="true"
+                            >
+                              <rect x="2" y="2" width="8" height="8" rx="1.5" />
+                            </svg>
+                          </button>
+                        </div>
                       ) : pendingUserInputs.length === 0 ? (
                         showPlanFollowUpPrompt ? (
                           prompt.trim().length > 0 ? (

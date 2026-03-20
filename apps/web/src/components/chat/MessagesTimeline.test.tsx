@@ -42,6 +42,32 @@ beforeAll(() => {
   });
 });
 
+// Shared minimal props for the new prop interface (nowIso removed — managed internally).
+function makeBaseProps() {
+  return {
+    hasMessages: true,
+    isWorking: false,
+    activeTurnInProgress: false,
+    activeTurnStartedAt: null,
+    scrollContainer: null,
+    timelineEntries: [],
+    completionDividerBeforeEntryId: null,
+    completionSummary: null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    expandedWorkGroups: {},
+    onToggleWorkGroup: () => {},
+    onOpenTurnDiff: () => {},
+    revertTurnCountByUserMessageId: new Map(),
+    onRevertUserMessage: () => {},
+    isRevertingCheckpoint: false,
+    onImageExpand: () => {},
+    markdownCwd: undefined,
+    resolvedTheme: "light" as const,
+    timestampFormat: "locale" as const,
+    workspaceRoot: undefined,
+  };
+}
+
 describe("MessagesTimeline", () => {
   it("renders inline terminal labels with the composer chip UI", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -77,7 +103,6 @@ describe("MessagesTimeline", () => {
         completionDividerBeforeEntryId={null}
         completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
         onToggleWorkGroup={() => {}}
         onOpenTurnDiff={() => {}}
@@ -137,7 +162,6 @@ describe("MessagesTimeline", () => {
         completionDividerBeforeEntryId={null}
         completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-18T12:00:05.000Z"
         expandedWorkGroups={{ "subagent:child-1": true }}
         onToggleWorkGroup={() => {}}
         onOpenTurnDiff={() => {}}
@@ -189,7 +213,6 @@ describe("MessagesTimeline", () => {
         completionDividerBeforeEntryId={null}
         completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-18T12:00:05.000Z"
         expandedWorkGroups={{}}
         onToggleWorkGroup={() => {}}
         onOpenTurnDiff={() => {}}
@@ -208,5 +231,65 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Runtime");
     expect(markup).toContain('aria-label="Expand subagent details"');
     expect(markup).not.toContain("Awaiting final output");
+  });
+
+  it("renders the Working indicator when isWorking=true with a start timestamp", async () => {
+    // The "working" row is generated internally by MessagesTimeline when isWorking=true.
+    // Previously this required the caller to pass a nowIso prop — now it is self-managed.
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-19T10:00:00.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    // The component renders either "Working for Xs" or "Working..." depending on timing.
+    // Both variations contain "Working".
+    expect(markup).toMatch(/Working/);
+  });
+
+  it("renders 'Working...' when isWorking=true but no start timestamp is available", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt={null}
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).toContain("Working...");
+  });
+
+  it("does not render the Working indicator when isWorking=false", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeBaseProps()}
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).not.toMatch(/Working for/);
+    expect(markup).not.toContain("Working...");
+  });
+
+  it("renders correctly without nowIso prop (nowIso is now internal)", async () => {
+    // Regression guard: the prop interface no longer has nowIso.
+    // TypeScript enforces this at compile time; this test documents the intent
+    // and verifies the component renders without crashing under the new interface.
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    expect(() =>
+      renderToStaticMarkup(<MessagesTimeline {...makeBaseProps()} />),
+    ).not.toThrow();
   });
 });
