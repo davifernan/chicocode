@@ -14,6 +14,16 @@
  *
  * WebSocket upgrades on `/__devproxy/<projectId>/*` are forwarded to the dev
  * server bidirectionally (messages, binary frames, close, error).
+ *
+ * Security:
+ *   - Only proxies to URLs tracked by DevServerManager (no open proxy).
+ *   - Only forwards to localhost/127.0.0.1 (dev servers bind locally by design).
+ *   - Strips outbound CORS headers (iframe is same-origin; CORS from the dev
+ *     server would be misleading and potentially harmful).
+ *   - TODO(phase-5): Add cookie-based session auth. Currently the proxy has the
+ *     same access model as the T3 static file serving (unauthenticated HTTP).
+ *     For servers with authToken configured, proxy access should require a valid
+ *     session cookie obtained via an authenticated WS exchange.
  */
 
 import http from "node:http";
@@ -26,6 +36,65 @@ import type { DevServerManager } from "./DevServerManager.ts";
 // ── Constants ────────────────────────────────────────────────────────
 
 export const DEV_PROXY_PATH_PREFIX = "/__devproxy/";
+
+/** Hostnames that dev servers are allowed to bind to. */
+const ALLOWED_UPSTREAM_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+/**
+ * Headers from the upstream dev server response that should be stripped
+ * before forwarding to the browser.
+ */
+const STRIPPED_RESPONSE_HEADERS = new Set([
+  // CORS headers — the proxy is same-origin; letting the dev server's CORS
+  // headers through would be confusing and may break certain browser checks.
+  "access-control-allow-origin",
+  "access-control-allow-methods",
+  "access-control-allow-headers",
+  "access-control-allow-credentials",
+  "access-control-expose-headers",
+  "access-control-max-age",
+]);
+
+// ── Open WS connection tracking ──────────────────────────────────────
+
+/**
+ * All browser-side WebSocket connections currently open through the proxy,
+ * keyed by projectId. Used to close connections when a dev server stops.
+ */
+const openProxyWsConnections = new Map<string, Set<WebSocket>>();
+
+function trackWsConnection(projectId: string, ws: WebSocket): void {
+  let set = openProxyWsConnections.get(projectId);
+  if (!set) {
+    set = new Set();
+    openProxyWsConnections.set(projectId, set);
+  }
+  set.add(ws);
+  ws.once("close", () => {
+    set.delete(ws);
+    if (set.size === 0) {
+      openProxyWsConnections.delete(projectId);
+    }
+  });
+}
+
+/**
+ * Close all open proxy WS connections for a project.
+ * Called when DevServerManager reports the dev server has stopped or errored.
+ */
+export function closeProxyWsConnectionsForProject(projectId: string): void {
+  const connections = openProxyWsConnections.get(projectId);
+  if (!connections || connections.size === 0) return;
+
+  for (const ws of connections) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1001, "Dev server stopped");
+    } else if (ws.readyState === WebSocket.CONNECTING) {
+      ws.terminate();
+    }
+  }
+  openProxyWsConnections.delete(projectId);
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -61,7 +130,9 @@ function parseDevProxyUrl(url: URL): ParsedProxyUrl | null {
 
 /**
  * Resolve the upstream origin URL for a project.
- * Returns null with an error message if the dev server is not running.
+ *
+ * Security: only allows localhost/127.0.0.1 upstreams. Dev servers always bind
+ * locally; any other hostname would indicate a misconfiguration or an attack.
  */
 function resolveUpstream(
   projectId: string,
@@ -81,11 +152,22 @@ function resolveUpstream(
     };
   }
 
+  let origin: URL;
   try {
-    return { origin: new URL(info.url) };
+    origin = new URL(info.url);
   } catch {
     return { error: "Dev server URL is invalid", status: 502 };
   }
+
+  // Enforce local-only upstream to prevent open-proxy abuse.
+  if (!ALLOWED_UPSTREAM_HOSTS.has(origin.hostname)) {
+    return {
+      error: `Dev server URL has disallowed hostname: ${origin.hostname}`,
+      status: 502,
+    };
+  }
+
+  return { origin };
 }
 
 /**
@@ -176,6 +258,8 @@ export function handleDevProxyRequest(
   // Force identity encoding — we need to inspect HTML without decompressing.
   forwardHeaders["accept-encoding"] = "identity";
   forwardHeaders["host"] = origin.host;
+  forwardHeaders["x-forwarded-host"] = req.headers.host ?? "";
+  forwardHeaders["x-forwarded-proto"] = "https";
 
   const proxyReq = http.request(
     {
@@ -190,8 +274,12 @@ export function handleDevProxyRequest(
       const contentType = proxyRes.headers["content-type"] ?? "";
       const isHtml = contentType.startsWith("text/html");
 
-      // Build response headers, rewriting Location on redirects.
-      const responseHeaders: http.OutgoingHttpHeaders = { ...proxyRes.headers };
+      // Build response headers: rewrite Location on redirects, strip CORS.
+      const responseHeaders: http.OutgoingHttpHeaders = {};
+      for (const [key, value] of Object.entries(proxyRes.headers)) {
+        if (STRIPPED_RESPONSE_HEADERS.has(key)) continue;
+        responseHeaders[key] = value;
+      }
 
       const rawLocation = proxyRes.headers["location"];
       if (rawLocation) {
@@ -290,8 +378,8 @@ export function handleDevProxyRequest(
 // ── WebSocket proxy ───────────────────────────────────────────────────
 
 /**
- * A temporary WebSocketServer used only to complete HTTP upgrade handshakes.
- * Shared across all WS proxy connections to avoid creating one per connection.
+ * A shared WebSocketServer used only to complete HTTP upgrade handshakes.
+ * One instance is enough — all proxied WS connections share it.
  */
 const upgradeWss = new WebSocketServer({ noServer: true });
 
@@ -301,6 +389,8 @@ const upgradeWss = new WebSocketServer({ noServer: true });
  * 1. Accepts the browser WebSocket (completes the HTTP 101 handshake).
  * 2. Opens a WebSocket connection to the dev server.
  * 3. Pipes messages, binary frames, close codes, and errors bidirectionally.
+ * 4. Registers the browser WS in openProxyWsConnections so it can be closed
+ *    when the dev server stops (see closeProxyWsConnectionsForProject).
  *
  * This handles HMR connections from any bundler (Vite, Webpack, Next.js, etc.)
  * because the WebSocket constructor patch in the HTML injection routes all
@@ -333,6 +423,9 @@ export function handleDevProxyWsUpgrade(
 
   // Step 1: Accept the browser connection immediately.
   upgradeWss.handleUpgrade(request, socket, head, (browserWs) => {
+    // Track the connection so we can close it if the dev server stops.
+    trackWsConnection(parsed.projectId, browserWs);
+
     // Step 2: Connect to the dev server.
     const upstreamHeaders: Record<string, string> = {};
 

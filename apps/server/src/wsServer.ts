@@ -103,6 +103,7 @@ import {
   DEV_PROXY_PATH_PREFIX,
   handleDevProxyRequest,
   handleDevProxyWsUpgrade,
+  closeProxyWsConnectionsForProject,
 } from "./devServer/devServerProxy.ts";
 import { OpenCodeSessionSync } from "./opencode/OpenCodeSessionSync.ts";
 import {
@@ -1704,8 +1705,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   // Wire dev server manager events → push bus.
   // logLines: send the whole chunk in one Effect.runPromise so we create one
   // fiber per stdio data event instead of one fiber per line.
-  const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) =>
+  const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) => {
+    // Close open HMR proxy WS connections when the dev server stops or errors,
+    // so the browser sees a clean disconnect instead of a hanging connection.
+    if (info.status === "stopped" || info.status === "error") {
+      closeProxyWsConnectionsForProject(info.projectId);
+    }
     void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerStatusChanged, info));
+  };
   const onDevServerLogLines = (
     batch: import("./devServer/DevServerManager.ts").DevServerLogLinesBatch,
   ) =>
