@@ -1,6 +1,7 @@
-import { type ModelSlug, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { memo, useState } from "react";
+import { toastManager } from "../ui/toast";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { ChevronDownIcon } from "lucide-react";
 import { Button } from "../ui/button";
@@ -19,6 +20,32 @@ import {
 } from "../ui/menu";
 import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
+
+function getProviderHealth(
+  providerStatuses: readonly ServerProviderStatus[],
+  provider: ProviderKind,
+): "ok" | "warn" | "error" | null {
+  const s = providerStatuses.find((ps) => ps.provider === provider);
+  if (!s) return null;
+  if (s.status === "ready" && s.authStatus === "authenticated") return "ok";
+  if (s.status === "error" || s.authStatus === "unauthenticated") return "error";
+  return "warn";
+}
+
+function ProviderHealthDot({ health }: { health: "ok" | "warn" | "error" | null }) {
+  if (health === null) return null;
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "ms-auto size-1.5 shrink-0 rounded-full",
+        health === "ok" && "bg-emerald-500",
+        health === "warn" && "bg-amber-400",
+        health === "error" && "bg-destructive",
+      )}
+    />
+  );
+}
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -65,7 +92,6 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   opencode: OpenCodeIcon,
   claudeAgent: ClaudeAI,
-  claudeCode: ClaudeAI,
   cursor: CursorIcon,
 };
 
@@ -89,6 +115,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   compact?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  providerStatuses?: readonly ServerProviderStatus[];
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const activeProvider = props.lockedProvider ?? props.provider;
@@ -96,6 +123,20 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
+  const statuses = props.providerStatuses ?? [];
+
+  const handleProviderClick = (provider: ProviderKind) => {
+    const health = getProviderHealth(statuses, provider);
+    if (health !== "error") return true; // allow switch
+    const status = statuses.find((s) => s.provider === provider);
+    toastManager.add({
+      type: "error",
+      title: `${provider === "claudeAgent" ? "Claude Code" : provider === "opencode" ? "OpenCode" : "Codex"} not connected`,
+      description: status?.message ?? "Check provider settings and restart.",
+    });
+    return false; // block switch
+  };
+
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -139,16 +180,30 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             props.compact ? "max-w-36" : undefined,
           )}
         >
-          <ProviderIcon
-            aria-hidden="true"
-            className={cn(
-              "size-4 shrink-0",
-              providerIconClassName(activeProvider, "text-muted-foreground/70"),
-              activeProvider === "claudeAgent" && props.ultrathinkActive
-                ? "ultrathink-chroma"
-                : undefined,
-            )}
-          />
+          <span className="relative shrink-0">
+            <ProviderIcon
+              aria-hidden="true"
+              className={cn(
+                "size-4 shrink-0",
+                providerIconClassName(activeProvider, "text-muted-foreground/70"),
+                activeProvider === "claudeAgent" && props.ultrathinkActive
+                  ? "ultrathink-chroma"
+                  : undefined,
+              )}
+            />
+            {(() => {
+              const h = getProviderHealth(statuses, activeProvider);
+              if (h === "error")
+                return (
+                  <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-destructive ring-1 ring-background" />
+                );
+              if (h === "warn")
+                return (
+                  <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-amber-400 ring-1 ring-background" />
+                );
+              return null;
+            })()}
+          </span>
           <span className="min-w-0 flex-1 truncate">{selectedModelLabel}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
         </span>
@@ -177,7 +232,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               return (
                 <MenuSub key={option.value}>
-                  <MenuSubTrigger>
+                  <MenuSubTrigger onClick={() => handleProviderClick(option.value)}>
                     <OptionIcon
                       aria-hidden="true"
                       className={cn(
@@ -186,6 +241,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                       )}
                     />
                     {option.label}
+                    <ProviderHealthDot health={getProviderHealth(statuses, option.value)} />
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
                     <MenuGroup>

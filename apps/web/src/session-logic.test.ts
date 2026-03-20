@@ -1123,20 +1123,14 @@ describe("deriveCompletedTurnSummaryByAssistantMessageId", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("keeps Claude Code and Cursor visible as unavailable placeholders in the stack base", () => {
-    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
+  it("has three available providers and Cursor as coming-soon placeholder", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "opencode", label: "OpenCode", available: true },
-      { value: "claudeCode", label: "Claude Code", available: false },
+      { value: "claudeAgent", label: "Claude Code", available: true },
       { value: "cursor", label: "Cursor", available: false },
     ]);
-    expect(claude).toEqual({
-      value: "claudeCode",
-      label: "Claude Code",
-      available: false,
-    });
     expect(cursor).toEqual({
       value: "cursor",
       label: "Cursor",

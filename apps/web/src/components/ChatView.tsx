@@ -4765,6 +4765,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         lockedProvider={lockedProvider}
                         modelOptionsByProvider={modelOptionsByProvider}
                         onProviderModelChange={onProviderModelSelect}
+                        providerStatuses={providerStatuses}
                       />
 
                       {isComposerFooterCompact ? (
