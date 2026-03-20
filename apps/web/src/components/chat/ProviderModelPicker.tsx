@@ -20,16 +20,23 @@ import {
 } from "../ui/menu";
 import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 function getProviderHealth(
   providerStatuses: readonly ServerProviderStatus[],
   provider: ProviderKind,
-): "ok" | "warn" | "error" | null {
+): { state: "warn" | "error"; message: string } | null {
   const s = providerStatuses.find((ps) => ps.provider === provider);
   if (!s) return null;
-  if (s.status === "ready" && s.authStatus === "authenticated") return "ok";
-  if (s.status === "error" || s.authStatus === "unauthenticated") return "error";
-  return "warn";
+  if (s.status === "ready" && s.authStatus !== "unauthenticated") return null;
+  const state: "error" | "warn" =
+    s.status === "error" || s.authStatus === "unauthenticated" ? "error" : "warn";
+  const message =
+    s.message ??
+    (s.authStatus === "unauthenticated"
+      ? "Not authenticated. Run the provider's login command."
+      : "Provider is not ready.");
+  return { state, message };
 }
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -112,7 +119,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
   const handleProviderClick = (provider: ProviderKind) => {
     const health = getProviderHealth(statuses, provider);
-    if (health !== "error") return true; // allow switch
+    if (!health || health.state !== "error") return true; // allow switch
     const status = statuses.find((s) => s.provider === provider);
     toastManager.add({
       type: "error",
@@ -211,14 +218,28 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         providerIconClassName(option.value, "text-muted-foreground/85"),
                       )}
                     />
-                    <span
-                      className={cn(
-                        getProviderHealth(statuses, option.value) === "error" && "text-destructive",
-                        getProviderHealth(statuses, option.value) === "warn" && "text-amber-500",
-                      )}
-                    >
-                      {option.label}
-                    </span>
+                    {(() => {
+                      const h = getProviderHealth(statuses, option.value);
+                      const label = (
+                        <span
+                          className={cn(
+                            h?.state === "error" && "text-destructive",
+                            h?.state === "warn" && "text-amber-500",
+                          )}
+                        >
+                          {option.label}
+                        </span>
+                      );
+                      if (!h) return label;
+                      return (
+                        <Tooltip>
+                          <TooltipTrigger render={label} />
+                          <TooltipPopup side="right" className="max-w-56 text-xs">
+                            {h.message}
+                          </TooltipPopup>
+                        </Tooltip>
+                      );
+                    })()}
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
                     <MenuGroup>
