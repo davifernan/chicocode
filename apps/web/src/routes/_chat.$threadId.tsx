@@ -2,7 +2,11 @@ import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect, useState } from "react";
 
-import ChatView from "../components/ChatView";
+import { ChatViewSkeleton } from "../components/ChatViewSkeleton";
+
+// Lazy-load ChatView so the heavy editor/terminal/markdown stack is parsed only on first use.
+// ChatViewSkeleton is shown as fallback — same skeleton used while threads hydrate.
+const ChatView = lazy(() => import("../components/ChatView"));
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -208,8 +212,20 @@ function ChatThreadRouteView() {
     }
   }, [navigate, routeThreadExists, threadsHydrated, threadId]);
 
-  if (!threadsHydrated || !routeThreadExists) {
+  // Threads hydrated but this thread genuinely doesn't exist — navigate away (see useEffect above).
+  // Return null briefly; navigation is already in flight.
+  if (threadsHydrated && !routeThreadExists) {
     return null;
+  }
+
+  // Store not yet hydrated — show skeleton layout so the user sees structure immediately
+  // instead of a blank screen.
+  if (!threadsHydrated) {
+    return (
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <ChatViewSkeleton />
+      </SidebarInset>
+    );
   }
 
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
@@ -218,7 +234,9 @@ function ChatThreadRouteView() {
     return (
       <>
         <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+          <Suspense fallback={<ChatViewSkeleton />}>
+            <ChatView key={threadId} threadId={threadId} />
+          </Suspense>
         </SidebarInset>
         <DiffPanelInlineSidebar
           diffOpen={diffOpen}
@@ -233,7 +251,9 @@ function ChatThreadRouteView() {
   return (
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
-        <ChatView key={threadId} threadId={threadId} />
+        <Suspense fallback={<ChatViewSkeleton />}>
+          <ChatView key={threadId} threadId={threadId} />
+        </Suspense>
       </SidebarInset>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}

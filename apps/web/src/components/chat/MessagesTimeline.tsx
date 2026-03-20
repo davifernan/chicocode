@@ -77,7 +77,6 @@ interface MessagesTimelineProps {
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  nowIso: string;
   expandedWorkGroups: Record<string, boolean>;
   onToggleWorkGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -114,7 +113,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   completionDividerBeforeEntryId,
   completionSummary,
   turnDiffSummaryByAssistantMessageId,
-  nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
   onOpenTurnDiff,
@@ -135,6 +133,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+
+  // Self-managed 1 s timer — only ticks while the agent is working.
+  // Keeping this here (instead of in ChatView) means only MessagesTimeline
+  // re-renders every second, not the entire 5 000-line ChatView tree.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isWorking) return;
+    setNowTick(Date.now());
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isWorking]);
+  const nowIso = new Date(nowTick).toISOString();
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
