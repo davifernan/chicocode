@@ -297,7 +297,7 @@ function SidebarDevServerButton({
               "text-muted-foreground/70 hover:bg-secondary hover:text-foreground",
               showAlways
                 ? "opacity-100"
-                : "opacity-0 group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100",
+                : "opacity-0 group-hover/project-header:opacity-100 group-focus-within/project-header:opacity-100",
             )}
             onClick={(e) => {
               e.preventDefault();

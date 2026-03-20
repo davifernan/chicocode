@@ -954,6 +954,72 @@ export function SettingsPanel({ defaultSection = "appearance" }: SettingsPanelPr
               </div>
               <OpenCodeServerStatusPanel />
             </div>
+            <div className="border-t border-border" />
+
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Claude Code
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                These overrides apply to new Claude Code sessions and let you use a custom Claude
+                CLI install.
+              </p>
+              <label htmlFor="claude-binary-path" className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">Claude binary path</span>
+                <Input
+                  id="claude-binary-path"
+                  value={settings.claudeBinaryPath}
+                  onChange={(e) => updateSettings({ claudeBinaryPath: e.target.value })}
+                  placeholder="claude"
+                  spellCheck={false}
+                />
+                <span className="text-xs text-muted-foreground">
+                  Leave blank to use <code>claude</code> from your PATH.
+                </span>
+              </label>
+              <label htmlFor="claude-permission-mode" className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">Permission mode</span>
+                <select
+                  id="claude-permission-mode"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={settings.claudePermissionMode ?? ""}
+                  onChange={(e) =>
+                    updateSettings({
+                      claudePermissionMode: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Default</option>
+                  <option value="auto">Auto (allow safe tools)</option>
+                  <option value="bypassPermissions">Bypass permissions</option>
+                  <option value="plan">Plan mode</option>
+                </select>
+                <span className="text-xs text-muted-foreground">
+                  Controls which tool calls Claude can make without prompting.
+                </span>
+              </label>
+              <div className="flex items-start justify-between gap-3 text-xs text-muted-foreground">
+                <div className="min-w-0 flex-1">
+                  <p>Binary source</p>
+                  <p className="mt-1 break-all font-mono text-[11px] text-foreground">
+                    {settings.claudeBinaryPath || "PATH"}
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() =>
+                    updateSettings({
+                      claudeBinaryPath: defaults.claudeBinaryPath,
+                      claudePermissionMode: defaults.claudePermissionMode,
+                    })
+                  }
+                >
+                  Reset claude overrides
+                </Button>
+              </div>
+            </div>
           </div>
         );
 

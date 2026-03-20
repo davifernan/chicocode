@@ -1063,7 +1063,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const providerOptionsForDispatch = useMemo(() => {
     const hasCodexOverrides = Boolean(settings.codexBinaryPath || settings.codexHomePath);
     const hasOpenCodeOverrides = Boolean(settings.opencodeServerUrl || settings.opencodeBinaryPath);
-    if (!hasCodexOverrides && !hasOpenCodeOverrides) {
+    const hasClaudeOverrides = Boolean(settings.claudeBinaryPath || settings.claudePermissionMode);
+    if (!hasCodexOverrides && !hasOpenCodeOverrides && !hasClaudeOverrides) {
       return undefined;
     }
     return {
@@ -1083,12 +1084,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
             },
           }
         : {}),
+      ...(hasClaudeOverrides
+        ? {
+            claudeAgent: {
+              ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
+              ...(settings.claudePermissionMode
+                ? { permissionMode: settings.claudePermissionMode }
+                : {}),
+            },
+          }
+        : {}),
     };
   }, [
     settings.codexBinaryPath,
     settings.codexHomePath,
     settings.opencodeServerUrl,
     settings.opencodeBinaryPath,
+    settings.claudeBinaryPath,
+    settings.claudePermissionMode,
   ]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(

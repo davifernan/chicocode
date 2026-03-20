@@ -46,6 +46,12 @@ export const AppSettingsSchema = Schema.Struct({
   opencodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
+  claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  claudePermissionMode: Schema.NullOr(Schema.String.check(Schema.isMaxLength(256))).pipe(
+    Schema.withConstructorDefault(() => Option.some(null)),
+  ),
   defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
     Schema.withConstructorDefault(() => Option.some<"local" | "worktree">("local")),
   ),
