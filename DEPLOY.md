@@ -28,7 +28,7 @@ git --version
 
 ```bash
 # Pick a directory, e.g. /opt/t3code
-git clone https://github.com/<YOUR_FORK_OR_REPO>/t3code.git /opt/t3code
+git clone https://github.com/davifernan/chicocode.git /opt/t3code
 cd /opt/t3code
 
 # Install dependencies
@@ -93,7 +93,7 @@ Type=simple
 User=t3code
 WorkingDirectory=/opt/t3code
 EnvironmentFile=/etc/t3code/env
-ExecStart=/root/.bun/bin/bun run /opt/t3code/apps/server/dist/index.mjs \
+ExecStart=/home/t3code/.bun/bin/bun run /opt/t3code/apps/server/dist/index.mjs \
   --host 127.0.0.1 \
   --port 3773 \
   --no-browser
