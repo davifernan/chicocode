@@ -25,7 +25,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
 
 const AppSettingsSchema = Schema.Struct({
   defaultProvider: Schema.Literals(["codex", "opencode"]).pipe(
-    Schema.withConstructorDefault(() => Option.some("codex")),
+    Schema.withConstructorDefault(() => Option.some<ProviderKind>("codex")),
   ),
   defaultCodexModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
     Schema.withConstructorDefault(() => Option.some(getDefaultModel("codex"))),
@@ -46,7 +46,7 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
-    Schema.withConstructorDefault(() => Option.some("local")),
+    Schema.withConstructorDefault(() => Option.some<"local" | "worktree">("local")),
   ),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
   enableAssistantStreaming: Schema.Boolean.pipe(
@@ -56,7 +56,7 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
   sidebarOpenProjectLimit: Schema.Literals([1, 2, 3]).pipe(
-    Schema.withConstructorDefault(() => Option.some(1)),
+    Schema.withConstructorDefault(() => Option.some<SidebarOpenProjectLimit>(1)),
   ),
   timestampFormat: Schema.Literals(["locale", "12-hour", "24-hour"]).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_TIMESTAMP_FORMAT)),
@@ -68,6 +68,10 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some([])),
   ),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  navigateToForkedThread: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  forkPreFillContent: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

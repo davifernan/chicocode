@@ -6,14 +6,17 @@ import {
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
-import { memo } from "react";
+import { memo, useRef } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { Badge } from "../ui/badge";
-import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
+import ProjectScriptsControl, {
+  type NewProjectScriptInput,
+  type ProjectScriptsControlHandle,
+} from "../ProjectScriptsControl";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import DevServerControl from "../DevServerControl";
-import RightPanelControl, { type RightPanelMode } from "../RightPanelControl";
+import { DiffPanelButton, DevLogsPanelButton, type RightPanelMode } from "../RightPanelControl";
 
 export type { RightPanelMode };
 
@@ -62,6 +65,14 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
   onRightPanelModeChange,
 }: ChatHeaderProps) {
+  const scriptsControlRef = useRef<ProjectScriptsControlHandle>(null);
+  const onAddAction: (() => void) | undefined =
+    activeProjectScripts !== undefined
+      ? () => {
+          scriptsControlRef.current?.openAddDialog();
+        }
+      : undefined;
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -86,6 +97,7 @@ export const ChatHeader = memo(function ChatHeader({
       <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
         {activeProjectScripts && (
           <ProjectScriptsControl
+            ref={scriptsControlRef}
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
@@ -102,20 +114,24 @@ export const ChatHeader = memo(function ChatHeader({
             devServerInfo={devServerInfo}
           />
         )}
+        <DevLogsPanelButton
+          active={rightPanelMode === "dev-logs"}
+          onToggle={() => onRightPanelModeChange(rightPanelMode === "dev-logs" ? null : "dev-logs")}
+        />
         {activeProjectName && (
           <OpenInPicker
             keybindings={keybindings}
             availableEditors={availableEditors}
             openInCwd={openInCwd}
+            {...(onAddAction !== undefined ? { onAddAction } : {})}
           />
         )}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
-        <RightPanelControl
-          panelMode={rightPanelMode}
-          devServerRunning={devServerInfo?.status === "running"}
+        <DiffPanelButton
+          active={rightPanelMode === "diff"}
           isGitRepo={isGitRepo}
           shortcutLabel={diffToggleShortcutLabel}
-          onPanelModeChange={onRightPanelModeChange}
+          onToggle={() => onRightPanelModeChange(rightPanelMode === "diff" ? null : "diff")}
         />
       </div>
     </div>

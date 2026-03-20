@@ -181,7 +181,7 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
-import { PopoutBroadcaster } from "../lib/devLogsPopoutChannel";
+import { type ActiveProjectMessage, PopoutBroadcaster } from "../lib/devLogsPopoutChannel";
 
 interface OpenCodeComposerProviderModel {
   readonly id: string;
@@ -1595,12 +1595,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
   // Avoids stale closures inside the broadcaster's sync-request handler.
   const buildActiveProjectMsg = useCallback(() => {
     if (!activeProject) return null;
+    const activeDevServer = devServerByProjectId[activeProject.id];
     return {
       type: "active-project" as const,
       projectId: activeProject.id,
       projectName: activeProject.name,
-      devServerRunning: devServerByProjectId[activeProject.id]?.status === "running",
-    };
+      devServerRunning: activeDevServer?.status === "running",
+      serverUrl: activeDevServer?.url,
+      packageManager: activeDevServer?.packageManager,
+    } satisfies ActiveProjectMessage;
   }, [activeProject, devServerByProjectId]);
 
   const buildActiveProjectMsgRef = useRef(buildActiveProjectMsg);
@@ -1652,10 +1655,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!activeProject) return;
     const api = readNativeApi();
     if (!api) return;
-    await api.devServer.stop({ projectId: activeProject.id });
-    // Brief delay so the process has time to exit before we re-spawn
-    await new Promise<void>((r) => setTimeout(r, 800));
-    await api.devServer.start({ projectId: activeProject.id, cwd: activeProject.cwd });
+    await api.devServer.restart({ projectId: activeProject.id, cwd: activeProject.cwd });
   }, [activeProject]);
 
   const envLocked = Boolean(
@@ -2770,19 +2770,29 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   // Broadcast active project info to the popout window whenever it changes
   useEffect(() => {
-    if (!activeProject || !popoutChannelRef.current) return;
-    popoutChannelRef.current.send({
-      type: "active-project",
-      projectId: activeProject.id,
-      projectName: activeProject.name,
-      devServerRunning: devServerByProjectId[activeProject.id]?.status === "running",
-    });
+    const broadcaster = ensureBroadcaster();
+    const msg = buildActiveProjectMsg();
+    if (!msg) return;
+    broadcaster.send(msg);
+  }, [buildActiveProjectMsg, ensureBroadcaster]);
+
+  useEffect(() => {
+    if (!isElectron || !window.desktopBridge) return;
+    const targetUrl =
+      activeProject && devServerByProjectId[activeProject.id]?.status === "running"
+        ? (devServerByProjectId[activeProject.id]?.url ?? null)
+        : null;
+    void window.desktopBridge.updateDevServerPreviewUrl(targetUrl);
   }, [activeProject, devServerByProjectId]);
 
-  // Cleanup broadcaster on unmount
+  // Cleanup broadcaster on unmount.
+  // Also null the ref so ensureBroadcaster() creates a fresh instance if
+  // the component remounts (HMR, StrictMode double-mount) and would otherwise
+  // reuse the already-closed BroadcastChannel → InvalidStateError.
   useEffect(
     () => () => {
       popoutChannelRef.current?.close();
+      popoutChannelRef.current = null;
     },
     [],
   );
@@ -4054,6 +4064,98 @@ export default function ChatView({ threadId }: ChatViewProps) {
     void onRevertToTurnCount(targetTurnCount);
   };
 
+  const onForkMessage = useCallback(
+    (messageId: MessageId, prompt: string, navigateToFork: boolean, forkModel: string) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !activeProject) return;
+      if (activeThread.provider !== "opencode") return;
+
+      const messages = activeThread.messages;
+      const messageIndex = messages.findIndex((m) => m.id === messageId);
+      const message = messages[messageIndex];
+
+      const toOcId = (id: MessageId): string => {
+        const s = String(id);
+        return s.startsWith("oc:") ? s.slice(3) : s;
+      };
+
+      // USER message → fork excludes this message onward; prompt replaces it.
+      // ASSISTANT message → include the response; cut at the next message (or clone all).
+      let cutoffOcMessageId: string | undefined;
+      if (message?.role === "assistant") {
+        const nextMessage = messages[messageIndex + 1];
+        cutoffOcMessageId = nextMessage ? toOcId(nextMessage.id) : undefined;
+      } else {
+        cutoffOcMessageId = toOcId(messageId);
+      }
+
+      void (async () => {
+        try {
+          // The server resolves the live session id from threadId automatically.
+          // We pass externalSessionId only as a hint when no live session exists yet.
+          const { forkedSessionId, title: forkedTitle } = await api.opencode.forkSession({
+            threadId: activeThread.id,
+            messageId: cutoffOcMessageId,
+            directory: activeThread.worktreePath ?? activeProject.cwd,
+          });
+
+          const newThread = newThreadId();
+          const newMsgId = newMessageId();
+          const createdAt = new Date().toISOString();
+
+          await api.orchestration.dispatchCommand({
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId: newThread,
+            projectId: activeProject.id,
+            title: forkedTitle || `${activeThread.title ?? "Thread"} (fork)`,
+            model: forkModel || activeThread.model || selectedModel || "",
+            provider: "opencode",
+            source: "imported",
+            externalSessionId: forkedSessionId,
+            runtimeMode: activeThread.runtimeMode ?? runtimeMode,
+            interactionMode: activeThread.interactionMode ?? interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          });
+
+          await api.orchestration.dispatchCommand({
+            type: "thread.turn.start",
+            commandId: newCommandId(),
+            threadId: newThread,
+            message: { messageId: newMsgId, role: "user", text: prompt, attachments: [] },
+            provider: "opencode",
+            model: forkModel || activeThread.model || selectedModel || undefined,
+            assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
+            runtimeMode: activeThread.runtimeMode ?? runtimeMode,
+            interactionMode: activeThread.interactionMode ?? interactionMode,
+            createdAt,
+          });
+
+          const snapshot = await api.orchestration.getSnapshot();
+          syncServerReadModel(snapshot);
+
+          if (navigateToFork) {
+            await navigate({ to: "/$threadId", params: { threadId: newThread } });
+          }
+        } catch (err) {
+          console.error("[fork] Failed to fork message:", err);
+        }
+      })();
+    },
+    [
+      activeThread,
+      activeProject,
+      selectedModel,
+      runtimeMode,
+      interactionMode,
+      settings.enableAssistantStreaming,
+      navigate,
+      syncServerReadModel,
+    ],
+  );
+
   // Empty state: no active thread
   if (!activeThread) {
     return (
@@ -4147,6 +4249,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               <MessagesTimeline
                 key={activeThread.id}
                 hasMessages={timelineEntries.length > 0}
+                isLoadingMessages={!activeThread.messagesHydrated}
                 isWorking={isWorking}
                 activeTurnInProgress={isWorking || !latestTurnSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
@@ -4167,22 +4270,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeProject?.cwd ?? undefined}
+                isOpenCodeThread={activeThread.provider === "opencode"}
+                forkPreFillContent={settings.forkPreFillContent}
+                forkDefaultNavigate={settings.navigateToForkedThread}
+                forkModelOptions={modelOptionsByProvider[selectedProvider]}
+                forkDefaultModel={selectedModel}
+                onForkMessage={onForkMessage}
               />
             </div>
-
-            {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
-            {showScrollToBottom && (
-              <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
-                <button
-                  type="button"
-                  onClick={() => scrollMessagesToBottom("smooth")}
-                  className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 bg-card px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                >
-                  <ChevronDownIcon className="size-3.5" />
-                  Scroll to bottom
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Jump to latest control */}
@@ -4823,6 +4918,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
             />
             <DevLogsPanel
               logs={devServerLogsByProjectId[activeProject.id] ?? []}
+              status={devServerByProjectId[activeProject.id]?.status}
+              error={devServerByProjectId[activeProject.id]?.error}
+              recoveryHint={devServerByProjectId[activeProject.id]?.recoveryHint}
+              conflictingPid={devServerByProjectId[activeProject.id]?.conflictingPid}
               serverUrl={devServerByProjectId[activeProject.id]?.url}
               packageManager={devServerByProjectId[activeProject.id]?.packageManager}
               projectName={activeProject.name}

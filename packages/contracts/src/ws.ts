@@ -53,6 +53,7 @@ import {
   DevServerGetLogsInput,
   DevServerGetStatusInput,
   DevServerLogLinePayload,
+  DevServerRestartInput,
   DevServerStartInput,
   DevServerStatusChangedPayload,
   DevServerStopInput,
@@ -61,6 +62,9 @@ import {
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
 export const WS_METHODS = {
+  // OpenCode specific methods
+  opencodeForksession: "opencode.forkSession",
+
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -113,7 +117,9 @@ export const WS_METHODS = {
 
   // Dev server
   devServerStart: DEV_SERVER_WS_METHODS.start,
+  devServerRestart: DEV_SERVER_WS_METHODS.restart,
   devServerStop: DEV_SERVER_WS_METHODS.stop,
+  devServerStopAll: DEV_SERVER_WS_METHODS.stopAll,
   devServerGetStatus: DEV_SERVER_WS_METHODS.getStatus,
   devServerGetStatuses: DEV_SERVER_WS_METHODS.getStatuses,
   devServerGetLogs: DEV_SERVER_WS_METHODS.getLogs,
@@ -211,9 +217,22 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ events: Schema.Array(OrchestrationEvent) }),
   ),
 
+  // OpenCode methods
+  tagRequestBody(
+    WS_METHODS.opencodeForksession,
+    Schema.Struct({
+      threadId: ThreadId,
+      sessionId: Schema.optional(TrimmedNonEmptyString),
+      messageId: Schema.optional(TrimmedNonEmptyString),
+      directory: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+
   // Dev server
   tagRequestBody(WS_METHODS.devServerStart, DevServerStartInput),
+  tagRequestBody(WS_METHODS.devServerRestart, DevServerRestartInput),
   tagRequestBody(WS_METHODS.devServerStop, DevServerStopInput),
+  tagRequestBody(WS_METHODS.devServerStopAll, Schema.Struct({})),
   tagRequestBody(WS_METHODS.devServerGetStatus, DevServerGetStatusInput),
   tagRequestBody(WS_METHODS.devServerGetStatuses, Schema.Struct({})),
   tagRequestBody(WS_METHODS.devServerGetLogs, DevServerGetLogsInput),

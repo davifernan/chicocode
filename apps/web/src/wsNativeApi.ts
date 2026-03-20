@@ -322,7 +322,9 @@ export function createWsNativeApi(): NativeApi {
     },
     devServer: {
       start: (input) => mgmt().request(WS_METHODS.devServerStart, input),
+      restart: (input) => mgmt().request(WS_METHODS.devServerRestart, input),
       stop: (input) => mgmt().request(WS_METHODS.devServerStop, input),
+      stopAll: () => mgmt().request(WS_METHODS.devServerStopAll),
       getStatus: (input) => mgmt().request(WS_METHODS.devServerGetStatus, input),
       getStatuses: () => mgmt().request(WS_METHODS.devServerGetStatuses),
       getLogs: (input) => mgmt().request(WS_METHODS.devServerGetLogs, input),
@@ -352,6 +354,9 @@ export function createWsNativeApi(): NativeApi {
       exportThreadEvents: (threadId) =>
         app().request(WS_METHODS.syncExportThreadEvents, { threadId }),
       receiveEvents: (events) => app().request(WS_METHODS.syncReceiveEvents, { events }),
+    },
+    opencode: {
+      forkSession: (input) => app().request(WS_METHODS.opencodeForksession, input),
     },
   };
 

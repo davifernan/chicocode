@@ -1,14 +1,17 @@
 import {
   ArrowLeftIcon,
+  BombIcon,
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
+  PlayIcon,
   PlusIcon,
   RefreshCwIcon,
   RocketIcon,
   ServerIcon,
   SettingsIcon,
   StarIcon,
+  SquareIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -42,13 +45,13 @@ import { useAppSettings } from "../appSettings";
 import { resolveAppModelSelection } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
-import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import { cn, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
 import { shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
-import { readNativeApi } from "../nativeApi";
+import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { buildLocalDraftThread, resolveProjectThreadsWithDraft } from "../draftThreads";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -105,6 +108,7 @@ import { RemoteConnectModal } from "./RemoteConnectModal";
 import { RemoteStatusStrip } from "./RemoteStatusStrip";
 import { SettingsModal } from "./SettingsModal";
 import type { SettingsSectionId } from "./SettingsPanel";
+import type { DevServerInfo } from "@t3tools/contracts";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -222,6 +226,87 @@ function ProjectFavicon({ cwd }: { cwd: string }) {
 }
 
 type SortableProjectHandleProps = Pick<ReturnType<typeof useSortable>, "attributes" | "listeners">;
+
+function SidebarDevServerButton({
+  projectId,
+  cwd,
+  devServerInfo,
+}: {
+  projectId: ProjectId;
+  cwd: string;
+  devServerInfo: DevServerInfo | undefined;
+}) {
+  const [isLoading, setIsLoading] = useState(false);
+  const status = devServerInfo?.status ?? "idle";
+  const isRunning = status === "running";
+  const isStarting = status === "starting" || isLoading;
+
+  const handleStart = useCallback(async () => {
+    if (isStarting || isRunning) return;
+    setIsLoading(true);
+    try {
+      await ensureNativeApi().devServer.start({ projectId, cwd });
+    } catch (err) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to start dev server",
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectId, cwd, isStarting, isRunning]);
+
+  const handleStop = useCallback(() => {
+    void ensureNativeApi().devServer.stop({ projectId });
+  }, [projectId]);
+
+  const tooltip = isRunning ? "Stop dev server" : "Start dev server";
+  const showAlways = isRunning || isStarting;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className={cn(
+              "group/dev-btn absolute top-1 right-7 flex size-5 cursor-pointer items-center justify-center rounded-md p-0 transition-opacity",
+              "text-muted-foreground/70 hover:bg-secondary hover:text-foreground",
+              showAlways
+                ? "opacity-100"
+                : "opacity-0 group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100",
+            )}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (isStarting) return;
+              if (isRunning) {
+                handleStop();
+              } else {
+                void handleStart();
+              }
+            }}
+            disabled={isStarting}
+            aria-label={tooltip}
+          >
+            {isStarting ? (
+              <span className="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : isRunning ? (
+              <span className="relative flex size-full items-center justify-center">
+                <span className="size-1.5 rounded-full bg-emerald-500 transition-opacity group-hover/dev-btn:opacity-0" />
+                <SquareIcon className="absolute size-3 fill-current text-destructive opacity-0 transition-opacity group-hover/dev-btn:opacity-100" />
+              </span>
+            ) : (
+              <PlayIcon className="size-3" />
+            )}
+          </button>
+        }
+      />
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
 
 function SortableProjectItem({
   projectId,
@@ -1473,6 +1558,25 @@ export default function Sidebar() {
                 </TooltipTrigger>
                 <TooltipPopup side="right">Remote connect</TooltipPopup>
               </Tooltip>
+              {Object.values(devServerByProjectId).some(
+                (s) => s?.status === "running" || s?.status === "starting",
+              ) && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Kill all dev servers"
+                        className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => void ensureNativeApi().devServer.stopAll()}
+                      />
+                    }
+                  >
+                    <BombIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">Kill all dev servers</TooltipPopup>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1643,14 +1747,12 @@ export default function Sidebar() {
                               <span className="flex-1 truncate text-xs font-medium text-foreground/90">
                                 {project.name}
                               </span>
-                              {devServerByProjectId[project.id]?.status === "running" && (
-                                <span
-                                  className="size-1.5 shrink-0 rounded-full bg-emerald-500"
-                                  aria-label="Dev server running"
-                                  title="Dev server running"
-                                />
-                              )}
                             </SidebarMenuButton>
+                            <SidebarDevServerButton
+                              projectId={project.id}
+                              cwd={project.cwd}
+                              devServerInfo={devServerByProjectId[project.id]}
+                            />
                             <Tooltip>
                               <TooltipTrigger
                                 render={

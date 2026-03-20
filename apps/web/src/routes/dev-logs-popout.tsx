@@ -17,6 +17,8 @@ function DevLogsPopoutPage() {
 
   const [displayProjectId, setDisplayProjectId] = useState<string | null>(null);
   const [displayProjectName, setDisplayProjectName] = useState("Dev Logs");
+  const [fallbackServerUrl, setFallbackServerUrl] = useState<string | null>(null);
+  const [fallbackPackageManager, setFallbackPackageManager] = useState<string | null>(null);
 
   // Keeps one PopoutReceiver alive for the lifetime of this component
   const receiverRef = useRef<PopoutReceiver | null>(null);
@@ -33,6 +35,8 @@ function DevLogsPopoutPage() {
       if (msg.devServerRunning) {
         setDisplayProjectId(msg.projectId);
         setDisplayProjectName(msg.projectName);
+        setFallbackServerUrl(msg.serverUrl ?? null);
+        setFallbackPackageManager(msg.packageManager ?? null);
       }
     });
 
@@ -46,18 +50,34 @@ function DevLogsPopoutPage() {
     };
   }, []);
 
-  // Whenever devServerByProjectId changes: auto-select or re-request sync
+  // Seed the initial target from local state, but do not replace an existing
+  // target when the newly selected project has no running server.
   useEffect(() => {
-    if (displayProjectId !== null && devServerByProjectId[displayProjectId]?.status === "running") {
+    if (displayProjectId !== null) {
       return;
     }
     const running = Object.values(devServerByProjectId).find((s) => s.status === "running");
     if (running) {
       setDisplayProjectId(running.projectId);
+      setDisplayProjectName(
+        projects.find((project) => project.id === running.projectId)?.name ?? "Dev Logs",
+      );
+      setFallbackServerUrl(running.url ?? null);
+      setFallbackPackageManager(running.packageManager ?? null);
     } else if (displayProjectId === null && receiverRef.current) {
       receiverRef.current.requestSync();
     }
-  }, [devServerByProjectId, displayProjectId]);
+  }, [devServerByProjectId, displayProjectId, projects]);
+
+  useEffect(() => {
+    if (!displayProjectId) {
+      return;
+    }
+    const projectName = projects.find((project) => project.id === displayProjectId)?.name;
+    if (projectName) {
+      setDisplayProjectName(projectName);
+    }
+  }, [displayProjectId, projects]);
 
   // Keep document title in sync with the displayed project
   useEffect(() => {
@@ -74,13 +94,14 @@ function DevLogsPopoutPage() {
     if (!project?.cwd) return;
 
     const projectId = ProjectId.makeUnsafe(displayProjectId);
-    await api.devServer.stop({ projectId });
-    await new Promise<void>((r) => setTimeout(r, 800));
-    await api.devServer.start({ projectId, cwd: project.cwd });
+    await api.devServer.restart({ projectId, cwd: project.cwd });
   }, [displayProjectId, projects]);
 
   const logs = displayProjectId !== null ? (devServerLogsByProjectId[displayProjectId] ?? []) : [];
   const serverInfo = displayProjectId !== null ? devServerByProjectId[displayProjectId] : undefined;
+  const resolvedServerUrl = serverInfo?.url ?? fallbackServerUrl ?? undefined;
+  const resolvedPackageManager = serverInfo?.packageManager ?? fallbackPackageManager ?? undefined;
+  const resolvedStatus = serverInfo?.status ?? (resolvedServerUrl ? "running" : undefined);
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
@@ -91,8 +112,12 @@ function DevLogsPopoutPage() {
       ) : (
         <DevLogsPanel
           logs={logs}
-          serverUrl={serverInfo?.url}
-          packageManager={serverInfo?.packageManager}
+          status={resolvedStatus}
+          error={serverInfo?.error}
+          recoveryHint={serverInfo?.recoveryHint}
+          conflictingPid={serverInfo?.conflictingPid}
+          serverUrl={resolvedServerUrl}
+          packageManager={resolvedPackageManager}
           projectName={displayProjectName}
           onRestart={handleRestart}
           isPopout={true}

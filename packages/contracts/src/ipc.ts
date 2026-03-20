@@ -137,6 +137,8 @@ export interface DesktopBridge {
    * Creates the window directly from the main process — does NOT use window.open().
    */
   openOrFocusDevLogsPopout: () => Promise<void>;
+  openOrFocusDevServerPreview: (targetUrl: string) => Promise<void>;
+  updateDevServerPreviewUrl: (targetUrl: string | null) => Promise<void>;
 }
 
 export interface NativeApi {
@@ -205,7 +207,9 @@ export interface NativeApi {
   };
   devServer: {
     start: (input: DevServerStartInput) => Promise<DevServerInfo>;
+    restart: (input: DevServerStartInput) => Promise<DevServerInfo>;
     stop: (input: DevServerStopInput) => Promise<void>;
+    stopAll: () => Promise<void>;
     getStatus: (input: DevServerGetStatusInput) => Promise<DevServerInfo>;
     getStatuses: () => Promise<DevServerInfo[]>;
     getLogs: (input: DevServerGetLogsInput) => Promise<string[]>;
@@ -225,5 +229,15 @@ export interface NativeApi {
     exportThreadEvents: (threadId: string) => Promise<{ events: OrchestrationEvent[] }>;
     /** Receive and idempotently append events from a sync peer. */
     receiveEvents: (events: OrchestrationEvent[]) => Promise<SyncReceiveResult>;
+  };
+  opencode: {
+    forkSession: (input: {
+      /** T3 thread id — the server resolves the live session from this. */
+      threadId: string;
+      /** Optional hint: explicit OpenCode session id if the caller already knows it. */
+      sessionId?: string | undefined;
+      messageId?: string | undefined;
+      directory?: string | undefined;
+    }) => Promise<{ forkedSessionId: string; title: string }>;
   };
 }

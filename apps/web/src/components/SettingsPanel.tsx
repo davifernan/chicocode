@@ -1429,6 +1429,63 @@ export function SettingsPanel({ defaultSection = "appearance" }: SettingsPanelPr
                 </div>
               ) : null}
             </div>
+
+            <div className="border-t border-border" />
+
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Fork behavior
+              </h3>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Jump to forked thread</p>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically navigate to the new chat after forking a message.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.navigateToForkedThread}
+                    onCheckedChange={(checked) =>
+                      updateSettings({ navigateToForkedThread: Boolean(checked) })
+                    }
+                    aria-label="Jump to forked thread"
+                  />
+                </div>
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Pre-fill fork prompt</p>
+                    <p className="text-xs text-muted-foreground">
+                      Fill the fork input with the original message text so you can edit it.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.forkPreFillContent}
+                    onCheckedChange={(checked) =>
+                      updateSettings({ forkPreFillContent: Boolean(checked) })
+                    }
+                    aria-label="Pre-fill fork prompt"
+                  />
+                </div>
+              </div>
+              {settings.navigateToForkedThread !== defaults.navigateToForkedThread ||
+              settings.forkPreFillContent !== defaults.forkPreFillContent ? (
+                <div className="flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        navigateToForkedThread: defaults.navigateToForkedThread,
+                        forkPreFillContent: defaults.forkPreFillContent,
+                      })
+                    }
+                  >
+                    Restore defaults
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           </div>
         );
 

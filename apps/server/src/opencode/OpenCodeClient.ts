@@ -468,6 +468,26 @@ export class OpenCodeClient {
   }
 
   /**
+   * Fork a session at an optional message boundary.
+   *
+   * Creates a new session containing all messages from the original up to
+   * (but NOT including) `messageId`. When omitted, the full history is cloned.
+   *
+   * @param sessionId  - Session to fork from.
+   * @param directory  - Working directory for instance scoping.
+   * @param messageId  - Optional exclusive upper-bound message ID.
+   */
+  async forkSession(
+    sessionId: string,
+    directory: string,
+    messageId?: string,
+  ): Promise<OpenCodeSession> {
+    const body: Record<string, string> = {};
+    if (messageId) body["messageID"] = messageId;
+    return this.fetchJson<OpenCodeSession>("POST", `/session/${sessionId}/fork`, directory, body);
+  }
+
+  /**
    * Abort a running session.
    *
    * @param sessionId - Session identifier.

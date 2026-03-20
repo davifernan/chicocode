@@ -1,3 +1,4 @@
+import type { DevServerInfo } from "@t3tools/contracts";
 import {
   ArrowUpRightIcon,
   CheckIcon,
@@ -13,6 +14,10 @@ import { Button } from "../ui/button";
 
 interface DevLogsPanelProps {
   logs: string[];
+  status?: DevServerInfo["status"] | undefined;
+  error?: string | undefined;
+  recoveryHint?: string | undefined;
+  conflictingPid?: number | undefined;
   serverUrl?: string | undefined;
   /** Package manager detected by the server (bun, npm, yarn, pnpm) */
   packageManager?: string | undefined;
@@ -43,6 +48,10 @@ function extractPortLabel(url: string | undefined): string | null {
 
 export function DevLogsPanel({
   logs,
+  status,
+  error,
+  recoveryHint,
+  conflictingPid,
   serverUrl,
   packageManager,
   projectName,
@@ -56,9 +65,19 @@ export function DevLogsPanel({
   const [urlCopied, setUrlCopied] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
 
+  // Track the last length we scrolled for, so we skip the DOM read (which
+  // forces a layout reflow) when nothing new has actually arrived.
+  const lastScrolledLengthRef = useRef(logs.length);
+
   // Auto-scroll to bottom when new logs arrive, unless the user has scrolled up
   useEffect(() => {
-    if (!isAtBottom) return;
+    if (!isAtBottom) {
+      lastScrolledLengthRef.current = logs.length;
+      return;
+    }
+    // No new lines since last scroll — avoid the forced reflow.
+    if (logs.length === lastScrolledLengthRef.current) return;
+    lastScrolledLengthRef.current = logs.length;
     const el = containerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [logs, isAtBottom]);
@@ -88,9 +107,11 @@ export function DevLogsPanel({
   };
 
   const portLabel = extractPortLabel(serverUrl);
+  const isError = status === "error";
+  const statusDotClass = isError ? "bg-destructive" : "bg-emerald-500";
 
   return (
-    <div className={cn("flex flex-col bg-background", className)}>
+    <div className={cn("flex min-h-0 flex-col bg-background", className)}>
       {isPopout ? (
         // ── Popout header ───────────────────────────────────────────────────────
         // drag-region: whole bar is draggable; pl-[76px] clears macOS traffic lights.
@@ -99,7 +120,10 @@ export function DevLogsPanel({
         <div className="drag-region flex h-[52px] shrink-0 items-center gap-3 border-b border-border pl-[76px] pr-3">
           {/* Left: status dot + label + pm badge */}
           <div className="flex shrink-0 items-center gap-1.5">
-            <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+            <span
+              className={cn("size-1.5 shrink-0 rounded-full", statusDotClass)}
+              aria-hidden="true"
+            />
             <span className="text-xs font-medium text-foreground/90">Dev Logs</span>
             {packageManager && (
               <Badge
@@ -118,18 +142,19 @@ export function DevLogsPanel({
               type="button"
               className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground [-webkit-app-region:no-drag]"
               onClick={() => {
-                // In Electron, use desktopBridge.openExternal so the URL
-                // goes directly to shell.openExternal → system browser,
-                // bypassing setWindowOpenHandler entirely.
                 if (window.desktopBridge) {
-                  void window.desktopBridge.openExternal(serverUrl);
+                  void window.desktopBridge.openOrFocusDevServerPreview(serverUrl);
                 } else {
-                  window.open(serverUrl, "_blank", "noopener,noreferrer");
+                  const previewUrl = `/dev-server-preview?target=${encodeURIComponent(serverUrl)}`;
+                  window.open(previewUrl, "_blank", "noopener,noreferrer");
                 }
               }}
-              title={`Open ${serverUrl} in browser`}
+              title={`Open ${serverUrl} in preview`}
             >
-              <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+              <span
+                className={cn("size-1.5 shrink-0 rounded-full", statusDotClass)}
+                aria-hidden="true"
+              />
               <span className="truncate">{serverUrl}</span>
               <ExternalLinkIcon className="size-2.5 shrink-0 opacity-40" />
             </button>
@@ -159,7 +184,10 @@ export function DevLogsPanel({
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
           {/* Left: status dot + label + badges + project name */}
           <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-            <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+            <span
+              className={cn("size-1.5 shrink-0 rounded-full", statusDotClass)}
+              aria-hidden="true"
+            />
             <span className="shrink-0 text-xs font-medium text-foreground/90">Dev Logs</span>
 
             {packageManager && (
@@ -211,7 +239,19 @@ export function DevLogsPanel({
           </div>
 
           {/* Right: popout button */}
-          <div className="flex shrink-0 items-center">
+          <div className="flex shrink-0 items-center gap-1">
+            {onRestart && (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                onClick={() => void handleRestartClick()}
+                disabled={isRestarting}
+                title="Hard restart dev server"
+              >
+                <RotateCwIcon className={cn("size-3.5", isRestarting && "animate-spin")} />
+              </Button>
+            )}
             {onPopout && (
               <Button
                 size="xs"
@@ -227,13 +267,44 @@ export function DevLogsPanel({
         </div>
       )}
 
+      {isError && error ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <span className="min-w-0 flex-1 truncate">{error}</span>
+          {conflictingPid !== undefined ? (
+            <Badge variant="outline" size="sm" className="shrink-0 font-mono text-destructive">
+              PID {conflictingPid}
+            </Badge>
+          ) : null}
+          {recoveryHint ? (
+            <span className="hidden text-muted-foreground md:inline">{recoveryHint}</span>
+          ) : null}
+          {onRestart ? (
+            <Button
+              size="xs"
+              variant="outline"
+              className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => void handleRestartClick()}
+              disabled={isRestarting}
+            >
+              <RotateCwIcon className={cn("size-3.5", isRestarting && "animate-spin")} />
+              Retry dev
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Log output */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-2 font-mono"
       >
-        {logs.length === 0 ? (
+        {!status || status === "idle" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
+            <span>No dev server running.</span>
+            <span>Click &ldquo;Run dev&rdquo; in the header to start one.</span>
+          </div>
+        ) : logs.length === 0 ? (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             Waiting for dev server output…
           </div>

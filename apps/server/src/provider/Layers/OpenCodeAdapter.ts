@@ -1665,14 +1665,29 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
         const client = new OpenCodeClient(creds.url, creds.username, creds.password);
         const directory = input.cwd ?? process.cwd();
 
+        // When resumeCursor is a string it is an existing OpenCode session id —
+        // fetch it instead of creating a new blank session.
+        const resumeSessionId =
+          typeof input.resumeCursor === "string" && input.resumeCursor.trim().length > 0
+            ? input.resumeCursor.trim()
+            : undefined;
+
         // Create or resume an OpenCode session.
         const session = yield* Effect.tryPromise({
-          try: () => client.createSession(directory),
+          try: () =>
+            resumeSessionId
+              ? client.getSession(resumeSessionId, directory)
+              : client.createSession(directory),
           catch: (cause) =>
             new ProviderAdapterProcessError({
               provider: PROVIDER,
               threadId: input.threadId,
-              detail: toMessage(cause, "Failed to create OpenCode session."),
+              detail: toMessage(
+                cause,
+                resumeSessionId
+                  ? "Failed to resume OpenCode session."
+                  : "Failed to create OpenCode session.",
+              ),
               cause,
             }),
         });
@@ -1702,6 +1717,9 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
           status: "ready" as const,
           runtimeMode: input.runtimeMode,
           cwd: directory,
+          // Expose the live session id as resumeCursor so the fork handler and
+          // ProviderCommandReactor can retrieve it via listSessions().
+          resumeCursor: session.id,
           threadId: input.threadId,
           createdAt: now,
           updatedAt: now,
@@ -1841,6 +1859,8 @@ const makeOpenCodeAdapter = (options?: OpenCodeAdapterLiveOptions) =>
           status: "ready" as const,
           runtimeMode: "full-access" as const,
           cwd: state.directory,
+          // Expose the live OpenCode session id so the fork handler can find it.
+          resumeCursor: state.sessionId,
           threadId: threadId as ThreadId,
           createdAt: now,
           updatedAt: now,

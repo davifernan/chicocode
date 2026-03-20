@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  appendDevServerLogLines,
   mapProjectsFromReadModel,
   markThreadUnread,
   reorderProjects,
@@ -430,5 +431,91 @@ describe("store read model sync", () => {
       "/tmp/project-2",
       "/tmp/project-1",
     ]);
+  });
+});
+
+// ── appendDevServerLogLines ───────────────────────────────────────────────────
+
+describe("appendDevServerLogLines", () => {
+  const pid = "project-1";
+
+  const emptyState = (): AppState => ({
+    projects: [],
+    threads: [],
+    threadsHydrated: false,
+    devServerByProjectId: {},
+    devServerLogsByProjectId: {},
+  });
+
+  it("returns the same state reference when lines is empty", () => {
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, []);
+    expect(next).toBe(state);
+  });
+
+  it("appends lines to an empty log buffer", () => {
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, ["line1", "line2"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["line1", "line2"]);
+  });
+
+  it("appends lines to an existing log buffer", () => {
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [pid]: ["old"] },
+    };
+    const next = appendDevServerLogLines(state, pid, ["new1", "new2"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["old", "new1", "new2"]);
+  });
+
+  it("preserves logs for other projects", () => {
+    const other = "project-2";
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [other]: ["untouched"] },
+    };
+    const next = appendDevServerLogLines(state, pid, ["line1"]);
+    expect(next.devServerLogsByProjectId[other]).toEqual(["untouched"]);
+    expect(next.devServerLogsByProjectId[pid]).toEqual(["line1"]);
+  });
+
+  it("trims the oldest lines when the buffer would exceed DEV_SERVER_MAX_LOG_LINES (500)", () => {
+    // Fill the buffer to exactly 500 lines
+    const existing = Array.from({ length: 500 }, (_, i) => `existing-${i}`);
+    const state = {
+      ...emptyState(),
+      devServerLogsByProjectId: { [pid]: existing },
+    };
+    const newLines = ["new1", "new2", "new3"];
+    const next = appendDevServerLogLines(state, pid, newLines);
+    const result = next.devServerLogsByProjectId[pid] ?? [];
+
+    expect(result.length).toBe(500);
+    // The oldest lines are removed to make room
+    expect(result.at(-1)).toBe("new3");
+    expect(result.at(-2)).toBe("new2");
+    expect(result.at(-3)).toBe("new1");
+    // Oldest existing lines are gone
+    expect(result.includes("existing-0")).toBe(false);
+    expect(result.includes("existing-1")).toBe(false);
+    expect(result.includes("existing-2")).toBe(false);
+  });
+
+  it("handles a batch larger than the cap by keeping only the tail", () => {
+    const newLines = Array.from({ length: 600 }, (_, i) => `line-${i}`);
+    const state = emptyState();
+    const next = appendDevServerLogLines(state, pid, newLines);
+    const result = next.devServerLogsByProjectId[pid] ?? [];
+
+    expect(result.length).toBe(500);
+    expect(result[0]).toBe("line-100"); // first of the kept tail
+    expect(result.at(-1)).toBe("line-599");
+  });
+
+  it("does not mutate the original state", () => {
+    const state = emptyState();
+    const stateBefore = JSON.stringify(state);
+    appendDevServerLogLines(state, pid, ["a", "b"]);
+    expect(JSON.stringify(state)).toBe(stateBefore);
   });
 });

@@ -13,6 +13,8 @@ export interface ActiveProjectMessage {
   projectId: string;
   projectName: string;
   devServerRunning: boolean;
+  serverUrl?: string | undefined;
+  packageManager?: string | undefined;
 }
 
 /**
@@ -34,8 +36,14 @@ export type PopoutMessage = ActiveProjectMessage | RequestSyncMessage;
 export class PopoutBroadcaster {
   private readonly channel = new BroadcastChannel(CHANNEL_NAME);
   private syncRequestHandler: (() => void) | null = null;
+  private closed = false;
+
+  get isClosed(): boolean {
+    return this.closed;
+  }
 
   send(msg: ActiveProjectMessage): void {
+    if (this.closed) return;
     // BroadcastChannel.postMessage does not take a targetOrigin (unlike window.postMessage)
     // oxlint-disable-next-line unicorn/require-post-message-target-origin
     this.channel.postMessage(msg);
@@ -58,6 +66,8 @@ export class PopoutBroadcaster {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.channel.close();
   }
 }

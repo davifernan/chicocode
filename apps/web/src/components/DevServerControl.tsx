@@ -84,6 +84,16 @@ export default function DevServerControl({ projectId, cwd, devServerInfo }: DevS
   }
 
   const isError = status === "error";
+  const errorTooltip = (() => {
+    if (!isError || !devServerInfo?.error) {
+      return "Start dev server (auto-detects package manager)";
+    }
+
+    const pidLabel =
+      devServerInfo.conflictingPid !== undefined ? ` PID ${devServerInfo.conflictingPid}.` : "";
+    const recoveryHint = devServerInfo.recoveryHint ?? "Click to retry.";
+    return `Error: ${devServerInfo.error}.${pidLabel} ${recoveryHint}`.trim();
+  })();
 
   return (
     <Tooltip>
@@ -103,11 +113,7 @@ export default function DevServerControl({ projectId, cwd, devServerInfo }: DevS
           </Button>
         }
       />
-      <TooltipPopup side="bottom">
-        {isError && devServerInfo?.error
-          ? `Error: ${devServerInfo.error}. Click to retry.`
-          : "Start dev server (auto-detects package manager)"}
-      </TooltipPopup>
+      <TooltipPopup side="bottom">{errorTooltip}</TooltipPopup>
     </Tooltip>
   );
 }

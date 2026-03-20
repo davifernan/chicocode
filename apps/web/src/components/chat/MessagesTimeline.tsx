@@ -42,6 +42,7 @@ import { SubagentCard } from "./SubagentCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { MessageForkButton, type ForkModelOption } from "./MessageForkButton";
 import {
   computeMessageDurationStart,
   getDistinctWorkEntryPreview,
@@ -67,6 +68,8 @@ const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
+  /** True while thread messages are being fetched from the server (not yet hydrated). */
+  isLoadingMessages?: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   scrollContainer: HTMLDivElement | null;
@@ -86,11 +89,24 @@ interface MessagesTimelineProps {
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  /** Whether the current thread is an OpenCode thread — enables the fork button. */
+  isOpenCodeThread?: boolean;
+  /** Whether the fork prompt should be pre-filled with the message text. */
+  forkPreFillContent?: boolean;
+  /** Default "navigate" checkbox value for fork (comes from user settings). */
+  forkDefaultNavigate?: boolean;
+  /** Model options to show in the fork model picker. */
+  forkModelOptions?: ReadonlyArray<ForkModelOption>;
+  /** Model slug pre-selected in the fork model picker. */
+  forkDefaultModel?: string;
+  /** Called when the user confirms a fork from a message. */
+  onForkMessage?: (messageId: MessageId, prompt: string, navigate: boolean, model: string) => void;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
   isWorking,
+  isLoadingMessages = false,
   activeTurnInProgress,
   activeTurnStartedAt,
   scrollContainer,
@@ -110,6 +126,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
+  isOpenCodeThread = false,
+  forkPreFillContent = false,
+  forkDefaultNavigate = false,
+  forkModelOptions = [],
+  forkDefaultModel = "",
+  onForkMessage = () => {},
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
@@ -327,6 +349,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }));
   }, []);
 
+  // Tracks which message IDs currently have their fork panel open. When a panel
+  // is open we force the action-bar to opacity-100 so that the portal-rendered
+  // model dropdown (which moves focus out of the bar) doesn't trigger the
+  // group-hover / focus-within CSS to hide the bar behind it.
+  const [forkOpenIds, setForkOpenIds] = useState<ReadonlySet<string>>(new Set());
+  const onForkOpenChange = useCallback((messageId: MessageId, open: boolean) => {
+    setForkOpenIds((prev) => {
+      const key = String(messageId);
+      const has = prev.has(key);
+      if (open === has) return prev;
+      const next = new Set(prev);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
   const renderRowContent = (row: TimelineRow) => (
     <div
       className="pb-4"
@@ -431,10 +470,29 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   />
                 )}
                 <div className="mt-1.5 flex items-center justify-end gap-2">
-                  <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 transition-opacity duration-200",
+                      forkOpenIds.has(String(row.message.id))
+                        ? "opacity-100"
+                        : "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
+                    )}
+                  >
                     {displayedUserMessage.copyText && (
                       <MessageCopyButton text={displayedUserMessage.copyText} />
                     )}
+                    <MessageForkButton
+                      messageText={displayedUserMessage.copyText ?? row.message.text}
+                      preFillContent={forkPreFillContent}
+                      defaultNavigate={forkDefaultNavigate}
+                      modelOptions={forkModelOptions}
+                      defaultModel={forkDefaultModel}
+                      disabled={!isOpenCodeThread}
+                      onOpenChange={(open) => onForkOpenChange(row.message.id, open)}
+                      onFork={(prompt, navigate, model) =>
+                        onForkMessage(row.message.id, prompt, navigate, model)
+                      }
+                    />
                     {canRevertAgentWork && (
                       <Button
                         type="button"
@@ -534,15 +592,41 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                <p className="mt-1.5 text-[10px] text-muted-foreground/30">
-                  {formatMessageMeta(
-                    row.message.createdAt,
-                    row.message.streaming
-                      ? formatElapsed(row.durationStart, nowIso)
-                      : formatElapsed(row.durationStart, row.message.completedAt),
-                    timestampFormat,
+                <div className="group mt-1.5 flex items-center gap-2">
+                  <p className="text-[10px] text-muted-foreground/30">
+                    {formatMessageMeta(
+                      row.message.createdAt,
+                      row.message.streaming
+                        ? formatElapsed(row.durationStart, nowIso)
+                        : formatElapsed(row.durationStart, row.message.completedAt),
+                      timestampFormat,
+                    )}
+                  </p>
+                  {!row.message.streaming && (
+                    <div
+                      className={cn(
+                        "flex items-center gap-1.5 transition-opacity duration-200",
+                        forkOpenIds.has(String(row.message.id))
+                          ? "opacity-100"
+                          : "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
+                      )}
+                    >
+                      <MessageCopyButton text={row.message.text} />
+                      <MessageForkButton
+                        messageText=""
+                        preFillContent={false}
+                        defaultNavigate={forkDefaultNavigate}
+                        modelOptions={forkModelOptions}
+                        defaultModel={forkDefaultModel}
+                        disabled={!isOpenCodeThread}
+                        onOpenChange={(open) => onForkOpenChange(row.message.id, open)}
+                        onFork={(prompt, navigate, model) =>
+                          onForkMessage(row.message.id, prompt, navigate, model)
+                        }
+                      />
+                    </div>
                   )}
-                </p>
+                </div>
               </div>
             </>
           );
@@ -592,6 +676,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
 
   if (!hasMessages && !isWorking) {
+    if (isLoadingMessages) {
+      return (
+        <div className="flex h-full items-center justify-center">
+          <div className="flex items-center gap-[5px]">
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30 animate-pulse" />
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:300ms]" />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">

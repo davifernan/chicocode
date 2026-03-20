@@ -293,6 +293,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const providerThreadCatalogRepository = yield* ProviderThreadCatalogRepository;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
+  const providerService = yield* ProviderService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1685,17 +1686,36 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeTerminalEvents()));
   yield* readiness.markTerminalSubscriptionsReady;
 
-  // Wire dev server manager events → push bus
+  // Wire dev server manager events → push bus.
+  // logLines: send the whole chunk in one Effect.runPromise so we create one
+  // fiber per stdio data event instead of one fiber per line.
   const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) =>
     void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerStatusChanged, info));
-  const onDevServerLogLine = (payload: import("@t3tools/contracts").DevServerLogLinePayload) =>
-    void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerLogLine, payload));
+  const onDevServerLogLines = (
+    batch: import("./devServer/DevServerManager.ts").DevServerLogLinesBatch,
+  ) =>
+    void Effect.runPromise(
+      Effect.gen(function* () {
+        for (const { line, stream } of batch.lines) {
+          yield* pushBus.publishAll(WS_CHANNELS.devServerLogLine, {
+            projectId: batch.projectId,
+            line,
+            stream,
+          });
+        }
+      }),
+    );
+  // Initialize PID persistence after migrations have run so the dev_server_pids
+  // table is guaranteed to exist. Also kills any orphaned processes from a
+  // previous crashed session.
+  devServerManager.initialize(path.join(serverConfig.stateDir, "state.sqlite"));
+
   devServerManager.on("statusChanged", onDevServerStatusChanged);
-  devServerManager.on("logLine", onDevServerLogLine);
+  devServerManager.on("logLines", onDevServerLogLines);
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       devServerManager.off("statusChanged", onDevServerStatusChanged);
-      devServerManager.off("logLine", onDevServerLogLine);
+      devServerManager.off("logLines", onDevServerLogLines);
     }),
   );
 
@@ -1906,9 +1926,23 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return info;
       }
 
+      case WS_METHODS.devServerRestart: {
+        const body = stripRequestTag(request.body);
+        const info = yield* Effect.tryPromise({
+          try: () => devServerManager.restart(body.projectId, body.cwd),
+          catch: (cause) => new RouteRequestError({ message: String(cause) }),
+        });
+        return info;
+      }
+
       case WS_METHODS.devServerStop: {
         const body = stripRequestTag(request.body);
         devServerManager.stop(body.projectId);
+        return;
+      }
+
+      case WS_METHODS.devServerStopAll: {
+        devServerManager.stopAll();
         return;
       }
 
@@ -1977,6 +2011,59 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.syncReceiveEvents: {
         const body = stripRequestTag(request.body);
         return yield* syncService.receiveEvents(Array.from(body.events));
+      }
+
+      case WS_METHODS.opencodeForksession: {
+        const body = stripRequestTag(request.body);
+        const forkedSession = yield* Effect.tryPromise({
+          try: async () => {
+            await openCodeServerControl.start();
+            const {
+              url: ocUrl,
+              username: ocUser,
+              password: ocPass,
+            } = openCodeServerControl.getCredentials();
+            const ocClient = new OpenCodeClient(ocUrl, ocUser, ocPass);
+            const snapshot = await Effect.runPromise(projectionReadModelQuery.getSnapshot());
+            const thread = snapshot.threads.find((t) => t.id === body.threadId);
+            if (!thread) {
+              throw new Error(`Thread not found: ${body.threadId}`);
+            }
+            if (thread.provider !== "opencode") {
+              throw new Error(`Thread '${body.threadId}' is not an OpenCode thread.`);
+            }
+
+            // Resolve the live OpenCode session id:
+            // 1. Explicit hint from caller (rarely needed).
+            // 2. Active runtime session (most common for native threads).
+            // 3. Persisted externalSessionId (imported/discovered threads).
+            const activeSessions = await Effect.runPromise(providerService.listSessions());
+            const activeSession = activeSessions.find(
+              (s) => s.provider === "opencode" && s.threadId === body.threadId,
+            );
+            const liveSessionId =
+              typeof activeSession?.resumeCursor === "string" &&
+              activeSession.resumeCursor.length > 0
+                ? activeSession.resumeCursor
+                : undefined;
+            const sourceSessionId =
+              body.sessionId ?? liveSessionId ?? thread.externalSessionId ?? undefined;
+            if (!sourceSessionId) {
+              throw new Error(`No OpenCode session id available for thread '${body.threadId}'.`);
+            }
+
+            const threadProject = snapshot.projects.find((p) => p.id === thread.projectId);
+            const resolvedDirectory =
+              body.directory ??
+              thread.worktreePath ??
+              threadProject?.workspaceRoot ??
+              snapshot.projects.find((p) => p.deletedAt === null)?.workspaceRoot ??
+              cwd;
+            return ocClient.forkSession(sourceSessionId, resolvedDirectory, body.messageId);
+          },
+          catch: (e) => new RouteRequestError({ message: `OpenCode fork failed: ${String(e)}` }),
+        });
+        return { forkedSessionId: forkedSession.id, title: forkedSession.title ?? "" };
       }
 
       default: {

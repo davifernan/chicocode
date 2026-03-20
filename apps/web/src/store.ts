@@ -684,16 +684,50 @@ function upsertDevServerStatus(state: AppState, info: DevServerInfo): AppState {
 }
 
 function appendDevServerLogLine(state: AppState, payload: DevServerLogLinePayload): AppState {
-  const existing = state.devServerLogsByProjectId[payload.projectId] ?? [];
+  return appendDevServerLogLines(state, payload.projectId, [payload.line]);
+}
+
+/**
+ * Appends multiple log lines in a single state update.
+ * Callers should prefer this over calling appendDevServerLogLine() in a loop —
+ * one Zustand set() means one React render instead of N.
+ */
+export function appendDevServerLogLines(
+  state: AppState,
+  projectId: string,
+  newLines: string[],
+): AppState {
+  if (newLines.length === 0) return state;
+  const existing = state.devServerLogsByProjectId[projectId] ?? [];
+  const combined = existing.length === 0 ? newLines : [...existing, ...newLines];
   const updated =
-    existing.length >= DEV_SERVER_MAX_LOG_LINES
-      ? [...existing.slice(existing.length - DEV_SERVER_MAX_LOG_LINES + 1), payload.line]
-      : [...existing, payload.line];
+    combined.length > DEV_SERVER_MAX_LOG_LINES
+      ? combined.slice(combined.length - DEV_SERVER_MAX_LOG_LINES)
+      : combined;
   return {
     ...state,
     devServerLogsByProjectId: {
       ...state.devServerLogsByProjectId,
-      [payload.projectId]: updated,
+      [projectId]: updated,
+    },
+  };
+}
+
+/**
+ * Replaces (not appends) the log buffer for one project with the given lines.
+ * Used when seeding from the server's rolling buffer after a reconnect so that
+ * stale client-side lines are discarded and the authoritative server view is shown.
+ */
+export function setDevServerLogs(state: AppState, projectId: string, lines: string[]): AppState {
+  const trimmed =
+    lines.length > DEV_SERVER_MAX_LOG_LINES
+      ? lines.slice(lines.length - DEV_SERVER_MAX_LOG_LINES)
+      : lines;
+  return {
+    ...state,
+    devServerLogsByProjectId: {
+      ...state.devServerLogsByProjectId,
+      [projectId]: trimmed,
     },
   };
 }
@@ -717,6 +751,8 @@ interface AppStore extends AppState {
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
   upsertDevServerStatus: (info: DevServerInfo) => void;
   appendDevServerLogLine: (payload: DevServerLogLinePayload) => void;
+  appendDevServerLogLinesBatch: (projectId: string, lines: string[]) => void;
+  setDevServerLogs: (projectId: string, lines: string[]) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -738,6 +774,9 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
   upsertDevServerStatus: (info) => set((state) => upsertDevServerStatus(state, info)),
   appendDevServerLogLine: (payload) => set((state) => appendDevServerLogLine(state, payload)),
+  appendDevServerLogLinesBatch: (projectId, lines) =>
+    set((state) => appendDevServerLogLines(state, projectId, lines)),
+  setDevServerLogs: (projectId, lines) => set((state) => setDevServerLogs(state, projectId, lines)),
 }));
 
 export function markRendererPersistenceReady(): void {

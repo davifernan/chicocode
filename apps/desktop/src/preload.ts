@@ -3,6 +3,8 @@ import type { DesktopBridge } from "@t3tools/contracts";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL = "desktop:open-or-focus-dev-logs-popout";
+const OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL = "desktop:open-or-focus-dev-server-preview";
+const UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL = "desktop:update-dev-server-preview-url";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -36,6 +38,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   downloadUpdate: () => ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL),
   installUpdate: () => ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL),
   openOrFocusDevLogsPopout: () => ipcRenderer.invoke(OPEN_OR_FOCUS_DEV_LOGS_POPOUT_CHANNEL),
+  openOrFocusDevServerPreview: (targetUrl: string) =>
+    ipcRenderer.invoke(OPEN_OR_FOCUS_DEV_SERVER_PREVIEW_CHANNEL, targetUrl),
+  updateDevServerPreviewUrl: (targetUrl: string | null) =>
+    ipcRenderer.invoke(UPDATE_DEV_SERVER_PREVIEW_URL_CHANNEL, targetUrl),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;

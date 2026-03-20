@@ -144,6 +144,8 @@ function EventRouter() {
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const upsertDevServerStatus = useStore((store) => store.upsertDevServerStatus);
   const appendDevServerLogLine = useStore((store) => store.appendDevServerLogLine);
+  const appendDevServerLogLinesBatch = useStore((store) => store.appendDevServerLogLinesBatch);
+  const setDevServerLogs = useStore((store) => store.setDevServerLogs);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
@@ -245,8 +247,33 @@ function EventRouter() {
     const unsubDevServerStatus = api.devServer.onStatusChanged((info) => {
       upsertDevServerStatus(info);
     });
+    // Buffer incoming log lines and flush at most once per animation frame.
+    // During dev-server startup, many lines arrive in rapid succession (one WS
+    // message each). Without batching every message triggers its own Zustand
+    // set() → React render → ANSI-parse + DOM-reflow.  Collecting them per rAF
+    // frame (≤16 ms) collapses N renders into 1 and eliminates the perceived
+    // 1-2 s lag in the Dev Logs panel.
+    const pendingLogLines = new Map<string, string[]>();
+    let rafHandle: number | null = null;
+
+    const flushPendingLogLines = () => {
+      rafHandle = null;
+      for (const [projectId, lines] of pendingLogLines) {
+        appendDevServerLogLinesBatch(projectId, lines);
+      }
+      pendingLogLines.clear();
+    };
+
     const unsubDevServerLogLine = api.devServer.onLogLine((payload) => {
-      appendDevServerLogLine(payload);
+      const existing = pendingLogLines.get(payload.projectId);
+      if (existing) {
+        existing.push(payload.line);
+      } else {
+        pendingLogLines.set(payload.projectId, [payload.line]);
+      }
+      if (rafHandle === null) {
+        rafHandle = requestAnimationFrame(flushPendingLogLines);
+      }
     });
 
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
@@ -270,11 +297,30 @@ function EventRouter() {
         latestSequence = 0;
         await syncSnapshot();
 
-        // Seed dev server statuses from server on (re)connect
+        // Seed dev server statuses and recent log history from server on (re)connect.
+        // Fetching logs here ensures the panel shows context immediately after a
+        // Cmd+Shift+R / window reload — the server keeps a rolling 500-line buffer
+        // even while our WebSocket was disconnected.
         try {
           const statuses = await api.devServer.getStatuses();
           for (const info of statuses) {
             upsertDevServerStatus(info);
+
+            if (info.status === "running" || info.status === "starting") {
+              // Fire-and-forget per project — don't block the status loop
+              void api.devServer
+                .getLogs({ projectId: info.projectId, limit: 200 })
+                .then((lines) => {
+                  if (lines.length > 0 && !disposed) {
+                    // Replace (not append) so stale client-side lines are
+                    // discarded and the server's authoritative view is shown.
+                    setDevServerLogs(info.projectId, lines);
+                  }
+                })
+                .catch(() => {
+                  // Best-effort — push events will fill the gap
+                });
+            }
           }
         } catch {
           // Best-effort seeding — push events will keep state up to date
@@ -351,6 +397,11 @@ function EventRouter() {
     return () => {
       disposed = true;
       needsProviderInvalidation = false;
+      if (rafHandle !== null) {
+        cancelAnimationFrame(rafHandle);
+        rafHandle = null;
+      }
+      pendingLogLines.clear();
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();
@@ -367,6 +418,8 @@ function EventRouter() {
     syncServerReadModel,
     upsertDevServerStatus,
     appendDevServerLogLine,
+    appendDevServerLogLinesBatch,
+    setDevServerLogs,
   ]);
 
   return null;

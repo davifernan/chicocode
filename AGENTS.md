@@ -1,5 +1,30 @@
 # AGENTS.md
 
+## CRITICAL: File Safety in Multi-Agent / Multi-Commit Environments
+
+**NEVER overwrite or replace file contents without an explicit instruction to do so.**
+
+This repo is worked on by multiple agents and humans simultaneously. A file you edited
+in a previous step may have been modified by a concurrent commit before you write to it
+again. Violating this rule destroys work silently and is the hardest class of bug to
+debug in a multi-agent workflow.
+
+Mandatory rules:
+
+1. **Always `Read` a file immediately before editing it**, even if you read it moments
+   ago. Use the modification-time error from the `Edit` tool as a hard signal that the
+   file changed underneath you — stop, re-read, and merge your change carefully.
+2. **Never use `Write` to replace a file you did not just read in the same step.**
+   Prefer `Edit` (targeted patch) over `Write` (full replacement) for any file that
+   already exists.
+3. **Before starting work on a task, run `git status` and `git log --oneline -5`** to
+   understand the current state of the branch. If files you intend to touch show
+   uncommitted changes or were touched by a very recent commit, read them first.
+4. **When committing, ONLY stage files directly related to your own changes.**
+   Never use `git add .` or `git add -A` — these sweep up changes made by other
+   agents or humans working concurrently and destroy their work silently.
+   Always stage files explicitly by path: `git add path/to/your/file.ts`.
+
 ## Task Completion Requirements
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
