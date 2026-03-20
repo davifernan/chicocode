@@ -206,22 +206,11 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 
 // ── OpenCode Server Status Panel ──────────────────────────────────────
 
-interface OpenCodeServerStatusResponse {
-  readonly state: "stopped" | "starting" | "running" | "error";
-  readonly url?: string;
-  readonly managedByT3?: boolean;
-  readonly message?: string;
-}
-
-async function fetchOpenCodeServerStatus(opts?: {
-  serverUrl?: string;
-}): Promise<OpenCodeServerStatusResponse> {
-  const resp = await fetch(buildOpenCodePath("/api/opencode/server", opts), {
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!resp.ok) throw new Error(`Server status fetch failed (${resp.status})`);
-  return (await resp.json()) as OpenCodeServerStatusResponse;
-}
+import {
+  fetchOpenCodeServerStatus,
+  openCodeServerStatusQueryKey,
+  type OpenCodeServerStatusResponse,
+} from "~/lib/opencode";
 
 async function startOpenCodeServer(opts?: {
   serverUrl?: string;
@@ -266,7 +255,7 @@ function OpenCodeServerStatusPanel() {
   const [isActing, setIsActing] = useState(false);
 
   const statusQuery = useQuery({
-    queryKey: ["opencode", "server-status", settings.opencodeServerUrl ?? null],
+    queryKey: openCodeServerStatusQueryKey(settings.opencodeServerUrl),
     queryFn: () =>
       fetchOpenCodeServerStatus(
         settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : undefined,

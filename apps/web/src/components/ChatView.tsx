@@ -34,6 +34,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { fetchOpenCodeServerStatus, openCodeServerStatusQueryKey } from "~/lib/opencode";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
@@ -1518,16 +1519,42 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
-  const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+  const rawProviderStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+
+  // Live OpenCode server status — overrides the one-shot startup health check.
+  // Same query key as SettingsPanel so React Query reuses the cache.
+  const openCodeLiveQuery = useQuery({
+    queryKey: openCodeServerStatusQueryKey(settings.opencodeServerUrl),
+    queryFn: () =>
+      fetchOpenCodeServerStatus(
+        settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : undefined,
+      ),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+
+  const providerStatuses = useMemo(() => {
+    const liveState = openCodeLiveQuery.data?.state;
+    if (liveState !== "running") return rawProviderStatuses;
+    // OpenCode is actually running — override stale startup warning
+    return rawProviderStatuses.map((s) =>
+      s.provider === "opencode"
+        ? {
+            ...s,
+            status: "ready" as const,
+            authStatus: "authenticated" as const,
+            message: undefined,
+          }
+        : s,
+    );
+  }, [rawProviderStatuses, openCodeLiveQuery.data?.state]);
+
   const activeProvider = activeThread?.session?.provider ?? "codex";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === activeProvider) ?? null,
     [activeProvider, providerStatuses],
   );
-  useEffect(() => {
-    if (activeThread?.provider !== "opencode") return;
-    void serverConfigQuery.refetch();
-  }, [activeThread?.id, activeThread?.provider, serverConfigQuery]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const threadTerminalRuntimeEnv = useMemo(() => {
