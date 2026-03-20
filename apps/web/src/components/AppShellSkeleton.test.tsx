@@ -8,7 +8,11 @@ import { vi } from "vitest";
 
 function makeWindowStub(opts: { isElectron?: boolean } = {}) {
   return {
-    matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+    matchMedia: () => ({
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }),
     addEventListener: () => {},
     removeEventListener: () => {},
     desktopBridge: opts.isElectron ? {} : undefined,
@@ -25,7 +29,12 @@ describe("AppShellSkeleton (web, non-Electron)", () => {
         offsetHeight: 0,
       },
     });
-    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} });
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+      clear: () => {},
+    });
   });
 
   it("renders without crashing", async () => {

@@ -21,10 +21,11 @@ export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   opencode: new Set(),
+  claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
 };
 
-const AppSettingsSchema = Schema.Struct({
-  defaultProvider: Schema.Literals(["codex", "opencode"]).pipe(
+export const AppSettingsSchema = Schema.Struct({
+  defaultProvider: Schema.Literals(["codex", "opencode", "claudeAgent"]).pipe(
     Schema.withConstructorDefault(() => Option.some<ProviderKind>("codex")),
   ),
   defaultCodexModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
@@ -44,6 +45,12 @@ const AppSettingsSchema = Schema.Struct({
   ),
   opencodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  claudePermissionMode: Schema.NullOr(Schema.String.check(Schema.isMaxLength(256))).pipe(
+    Schema.withConstructorDefault(() => Option.some(null)),
   ),
   defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
     Schema.withConstructorDefault(() => Option.some<"local" | "worktree">("local")),
@@ -65,6 +72,9 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some([])),
   ),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(
+    Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  customClaudeModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -114,6 +124,7 @@ export function normalizeCustomModelSlugs(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   const customCodexModels = normalizeCustomModelSlugs(settings.customCodexModels, "codex");
   const customOpenCodeModels = normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode");
+  const customClaudeModels = normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent");
   const normalizedDefaultOpenCodeModel = normalizeModelSlug(
     settings.defaultOpenCodeModel,
     "opencode",
@@ -122,6 +133,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     ...settings,
     customCodexModels,
     customOpenCodeModels,
+    customClaudeModels,
     defaultCodexModel: resolveAppModelSelection(
       "codex",
       customCodexModels,

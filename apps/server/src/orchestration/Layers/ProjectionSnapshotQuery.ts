@@ -231,6 +231,8 @@ function buildThreadSharedState(input: {
       id: row.planId,
       turnId: row.turnId,
       planMarkdown: row.planMarkdown,
+      implementedAt: row.implementedAt ?? null,
+      implementationThreadId: row.implementationThreadId ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     });

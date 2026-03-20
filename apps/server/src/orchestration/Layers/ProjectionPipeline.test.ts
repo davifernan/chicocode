@@ -1730,6 +1730,8 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
     const threadId = ThreadId.makeUnsafe("thread-restart");
     const turnId = TurnId.makeUnsafe("turn-restart");
     const messageId = MessageId.makeUnsafe("message-restart");
+    const sourcePlanThreadId = ThreadId.makeUnsafe("thread-plan-source");
+    const sourcePlanId = "plan-source";
     const turnStartedAt = "2026-02-26T14:00:00.000Z";
     const sessionSetAt = "2026-02-26T14:00:05.000Z";
 
@@ -1750,6 +1752,10 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         payload: {
           threadId,
           messageId,
+          sourceProposedPlan: {
+            threadId: sourcePlanThreadId,
+            planId: sourcePlanId,
+          },
           runtimeMode: "approval-required",
           createdAt: turnStartedAt,
         },
@@ -1801,11 +1807,15 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       return yield* sql<{
         readonly turnId: string;
         readonly userMessageId: string | null;
+        readonly sourceProposedPlanThreadId: string | null;
+        readonly sourceProposedPlanId: string | null;
         readonly startedAt: string;
       }>`
         SELECT
           turn_id AS "turnId",
           pending_message_id AS "userMessageId",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
           started_at AS "startedAt"
         FROM projection_turns
         WHERE turn_id = ${turnId}
@@ -1816,6 +1826,8 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       {
         turnId: "turn-restart",
         userMessageId: "message-restart",
+        sourceProposedPlanThreadId: "thread-plan-source",
+        sourceProposedPlanId: "plan-source",
         startedAt: turnStartedAt,
       },
     ]);

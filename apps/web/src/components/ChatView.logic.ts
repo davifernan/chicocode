@@ -128,10 +128,12 @@ export function cloneComposerImageForRetry(
 export function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
   customOpenCodeModels: readonly string[];
+  customClaudeModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
     opencode: getAppModelOptions("opencode", settings.customOpenCodeModels),
+    claudeAgent: getAppModelOptions("claudeAgent", settings.customClaudeModels),
   };
 }
 

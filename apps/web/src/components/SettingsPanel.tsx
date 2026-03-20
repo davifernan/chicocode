@@ -206,22 +206,11 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 
 // ── OpenCode Server Status Panel ──────────────────────────────────────
 
-interface OpenCodeServerStatusResponse {
-  readonly state: "stopped" | "starting" | "running" | "error";
-  readonly url?: string;
-  readonly managedByT3?: boolean;
-  readonly message?: string;
-}
-
-async function fetchOpenCodeServerStatus(opts?: {
-  serverUrl?: string;
-}): Promise<OpenCodeServerStatusResponse> {
-  const resp = await fetch(buildOpenCodePath("/api/opencode/server", opts), {
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!resp.ok) throw new Error(`Server status fetch failed (${resp.status})`);
-  return (await resp.json()) as OpenCodeServerStatusResponse;
-}
+import {
+  fetchOpenCodeServerStatus,
+  openCodeServerStatusQueryKey,
+  type OpenCodeServerStatusResponse,
+} from "~/lib/opencode";
 
 async function startOpenCodeServer(opts?: {
   serverUrl?: string;
@@ -266,7 +255,7 @@ function OpenCodeServerStatusPanel() {
   const [isActing, setIsActing] = useState(false);
 
   const statusQuery = useQuery({
-    queryKey: ["opencode", "server-status", settings.opencodeServerUrl ?? null],
+    queryKey: openCodeServerStatusQueryKey(settings.opencodeServerUrl),
     queryFn: () =>
       fetchOpenCodeServerStatus(
         settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : undefined,
@@ -953,6 +942,72 @@ export function SettingsPanel({ defaultSection = "appearance" }: SettingsPanelPr
                 </Button>
               </div>
               <OpenCodeServerStatusPanel />
+            </div>
+            <div className="border-t border-border" />
+
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Claude Code
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                These overrides apply to new Claude Code sessions and let you use a custom Claude
+                CLI install.
+              </p>
+              <label htmlFor="claude-binary-path" className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">Claude binary path</span>
+                <Input
+                  id="claude-binary-path"
+                  value={settings.claudeBinaryPath}
+                  onChange={(e) => updateSettings({ claudeBinaryPath: e.target.value })}
+                  placeholder="claude"
+                  spellCheck={false}
+                />
+                <span className="text-xs text-muted-foreground">
+                  Leave blank to use <code>claude</code> from your PATH.
+                </span>
+              </label>
+              <label htmlFor="claude-permission-mode" className="block space-y-1">
+                <span className="text-xs font-medium text-foreground">Permission mode</span>
+                <select
+                  id="claude-permission-mode"
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={settings.claudePermissionMode ?? ""}
+                  onChange={(e) =>
+                    updateSettings({
+                      claudePermissionMode: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Default</option>
+                  <option value="auto">Auto (allow safe tools)</option>
+                  <option value="bypassPermissions">Bypass permissions</option>
+                  <option value="plan">Plan mode</option>
+                </select>
+                <span className="text-xs text-muted-foreground">
+                  Controls which tool calls Claude can make without prompting.
+                </span>
+              </label>
+              <div className="flex items-start justify-between gap-3 text-xs text-muted-foreground">
+                <div className="min-w-0 flex-1">
+                  <p>Binary source</p>
+                  <p className="mt-1 break-all font-mono text-[11px] text-foreground">
+                    {settings.claudeBinaryPath || "PATH"}
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() =>
+                    updateSettings({
+                      claudeBinaryPath: defaults.claudeBinaryPath,
+                      claudePermissionMode: defaults.claudePermissionMode,
+                    })
+                  }
+                >
+                  Reset claude overrides
+                </Button>
+              </div>
             </div>
           </div>
         );

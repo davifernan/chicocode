@@ -272,6 +272,8 @@ describe("findLatestProposedPlan", () => {
             planMarkdown: "# Older",
             createdAt: "2026-02-23T00:00:01.000Z",
             updatedAt: "2026-02-23T00:00:01.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
           {
             id: "plan:thread-1:turn:turn-1",
@@ -279,6 +281,8 @@ describe("findLatestProposedPlan", () => {
             planMarkdown: "# Latest",
             createdAt: "2026-02-23T00:00:01.000Z",
             updatedAt: "2026-02-23T00:00:02.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
           {
             id: "plan:thread-1:turn:turn-2",
@@ -286,6 +290,8 @@ describe("findLatestProposedPlan", () => {
             planMarkdown: "# Different turn",
             createdAt: "2026-02-23T00:00:03.000Z",
             updatedAt: "2026-02-23T00:00:03.000Z",
+            implementedAt: null,
+            implementationThreadId: null,
           },
         ],
         TurnId.makeUnsafe("turn-1"),
@@ -308,6 +314,8 @@ describe("findLatestProposedPlan", () => {
           planMarkdown: "# First",
           createdAt: "2026-02-23T00:00:01.000Z",
           updatedAt: "2026-02-23T00:00:01.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
         {
           id: "plan:thread-1:turn:turn-2",
@@ -315,6 +323,8 @@ describe("findLatestProposedPlan", () => {
           planMarkdown: "# Latest",
           createdAt: "2026-02-23T00:00:02.000Z",
           updatedAt: "2026-02-23T00:00:03.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
       ],
       null,
@@ -604,6 +614,8 @@ describe("deriveTimelineEntries", () => {
           planMarkdown: "# Ship it",
           createdAt: "2026-02-23T00:00:02.000Z",
           updatedAt: "2026-02-23T00:00:02.000Z",
+          implementedAt: null,
+          implementationThreadId: null,
         },
       ],
       [
@@ -621,6 +633,8 @@ describe("deriveTimelineEntries", () => {
       kind: "proposed-plan",
       proposedPlan: {
         planMarkdown: "# Ship it",
+        implementedAt: null,
+        implementationThreadId: null,
       },
     });
   });
@@ -1109,20 +1123,14 @@ describe("deriveCompletedTurnSummaryByAssistantMessageId", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("keeps Claude Code and Cursor visible as unavailable placeholders in the stack base", () => {
-    const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
+  it("has three available providers and Cursor as coming-soon placeholder", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "opencode", label: "OpenCode", available: true },
-      { value: "claudeCode", label: "Claude Code", available: false },
+      { value: "claudeAgent", label: "Claude Code", available: true },
       { value: "cursor", label: "Cursor", available: false },
     ]);
-    expect(claude).toEqual({
-      value: "claudeCode",
-      label: "Claude Code",
-      available: false,
-    });
     expect(cursor).toEqual({
       value: "cursor",
       label: "Cursor",

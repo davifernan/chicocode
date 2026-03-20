@@ -19,7 +19,7 @@ import type {
   TurnDiffSummary,
 } from "./types";
 
-export type ProviderPickerKind = ProviderKind | "claudeCode" | "cursor";
+export type ProviderPickerKind = ProviderKind | "cursor";
 
 export const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
@@ -28,7 +28,7 @@ export const PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex", available: true },
   { value: "opencode", label: "OpenCode", available: true },
-  { value: "claudeCode", label: "Claude Code", available: false },
+  { value: "claudeAgent", label: "Claude Code", available: true },
   { value: "cursor", label: "Cursor", available: false },
 ];
 
@@ -508,6 +508,10 @@ export function findLatestProposedPlan(
     turnId: latestPlan.turnId,
     planMarkdown: latestPlan.planMarkdown,
   };
+}
+
+export function hasActionableProposedPlan(plan: LatestProposedPlanState | null): boolean {
+  return plan != null;
 }
 
 export function deriveWorkLogEntries(

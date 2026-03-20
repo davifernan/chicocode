@@ -28,7 +28,7 @@ export const ORCHESTRATION_WS_CHANNELS = {
   domainEvent: "orchestration.domainEvent",
 } as const;
 
-export const ProviderKind = Schema.Literals(["codex", "opencode"]);
+export const ProviderKind = Schema.Literals(["codex", "opencode", "claudeAgent"]);
 export type ProviderKind = typeof ProviderKind.Type;
 export const ProviderApprovalPolicy = Schema.Literals([
   "untrusted",
@@ -43,22 +43,35 @@ export const ProviderSandboxMode = Schema.Literals([
   "danger-full-access",
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
+export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
+
 export const ThreadSource = Schema.Literals(["native", "discovered", "imported"]);
 export type ThreadSource = typeof ThreadSource.Type;
-export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
-const CodexProviderStartOptions = Schema.Struct({
+
+export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
 });
-const OpenCodeProviderStartOptions = Schema.Struct({
+
+export const OpenCodeProviderStartOptions = Schema.Struct({
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   serverPassword: Schema.optional(TrimmedNonEmptyString),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
-const ProviderStartOptions = Schema.Struct({
+
+export const ClaudeProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  permissionMode: Schema.optional(TrimmedNonEmptyString),
+  maxThinkingTokens: Schema.optional(NonNegativeInt),
+});
+
+export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
+  claudeAgent: Schema.optional(ClaudeProviderStartOptions),
 });
+export type ProviderStartOptions = typeof ProviderStartOptions.Type;
+
 export const RuntimeMode = Schema.Literals(["approval-required", "full-access"]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -172,10 +185,17 @@ export const OrchestrationProposedPlan = Schema.Struct({
   id: OrchestrationProposedPlanId,
   turnId: Schema.NullOr(TurnId),
   planMarkdown: TrimmedNonEmptyString,
+  implementedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(() => null)),
+  implementationThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(() => null)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type OrchestrationProposedPlan = typeof OrchestrationProposedPlan.Type;
+
+const SourceProposedPlanReference = Schema.Struct({
+  threadId: ThreadId,
+  planId: OrchestrationProposedPlanId,
+});
 
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
@@ -258,6 +278,7 @@ export const OrchestrationLatestTurn = Schema.Struct({
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
@@ -361,11 +382,6 @@ export const OrchestrationSummaryReadModel = Schema.Struct({
 });
 export type OrchestrationSummaryReadModel = typeof OrchestrationSummaryReadModel.Type;
 
-export const OrchestrationGetThreadMessagesInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type OrchestrationGetThreadMessagesInput = typeof OrchestrationGetThreadMessagesInput.Type;
-
 export const OrchestrationThreadMessagesResult = Schema.Struct({
   threadId: ThreadId,
   messageCount: NonNegativeInt,
@@ -373,6 +389,14 @@ export const OrchestrationThreadMessagesResult = Schema.Struct({
   messages: Schema.Array(OrchestrationMessage),
 });
 export type OrchestrationThreadMessagesResult = typeof OrchestrationThreadMessagesResult.Type;
+
+export const OrchestrationGetThreadMessagesInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationGetThreadMessagesInput = typeof OrchestrationGetThreadMessagesInput.Type;
+
+const OrchestrationGetThreadMessagesResult = OrchestrationThreadMessagesResult;
+export type OrchestrationGetThreadMessagesResult = typeof OrchestrationGetThreadMessagesResult.Type;
 
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
@@ -472,6 +496,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -492,6 +517,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -789,6 +815,13 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadMessagesImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(ImportedThreadMessage),
+  providerMetadata: Schema.optional(Schema.NullOr(ThreadProviderMetadata)),
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadMessageSentPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -798,13 +831,6 @@ export const ThreadMessageSentPayload = Schema.Struct({
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-
-export const ThreadMessagesImportedPayload = Schema.Struct({
-  threadId: ThreadId,
-  messages: Schema.Array(ImportedThreadMessage),
-  providerMetadata: Schema.optional(Schema.NullOr(ThreadProviderMetadata)),
   updatedAt: IsoDateTime,
 });
 
@@ -820,6 +846,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -1081,11 +1108,8 @@ export type DispatchResult = typeof DispatchResult.Type;
 
 export const OrchestrationGetSnapshotInput = Schema.Struct({});
 export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
-const OrchestrationGetSnapshotResult = OrchestrationSummaryReadModel;
+const OrchestrationGetSnapshotResult = OrchestrationReadModel;
 export type OrchestrationGetSnapshotResult = typeof OrchestrationGetSnapshotResult.Type;
-
-const OrchestrationGetThreadMessagesResult = OrchestrationThreadMessagesResult;
-export type OrchestrationGetThreadMessagesResult = typeof OrchestrationGetThreadMessagesResult.Type;
 
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({ threadId: ThreadId }),
@@ -1117,10 +1141,6 @@ export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
     output: OrchestrationGetSnapshotResult,
-  },
-  getThreadMessages: {
-    input: OrchestrationGetThreadMessagesInput,
-    output: OrchestrationGetThreadMessagesResult,
   },
   dispatchCommand: {
     input: ClientOrchestrationCommand,

@@ -3,7 +3,11 @@ import {
   ProjectId,
   REASONING_EFFORT_OPTIONS_BY_PROVIDER,
   ThreadId,
+  type ClaudeCodeEffort,
+  type ClaudeModelOptions,
+  type CodexModelOptions,
   type CodexReasoningEffort,
+  type ProviderModelOptions,
   type ProviderKind,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -100,6 +104,9 @@ interface PersistedComposerThreadDraftState {
   effort?: CodexReasoningEffort | null;
   codexFastMode?: boolean | null;
   serviceTier?: string | null;
+  claudeEffort?: ClaudeCodeEffort | null;
+  claudeThinking?: boolean | null;
+  claudeFastMode?: boolean | null;
 }
 
 interface PersistedDraftThreadState {
@@ -133,6 +140,10 @@ interface ComposerThreadDraftState {
   interactionMode: ProviderInteractionMode | null;
   effort: CodexReasoningEffort | null;
   codexFastMode: boolean;
+  claudeEffort: ClaudeCodeEffort | null;
+  claudeThinking: boolean;
+  claudeFastMode: boolean;
+  readonly modelOptions: ProviderModelOptions;
 }
 
 export interface DraftThreadState {
@@ -199,6 +210,7 @@ interface ComposerDraftStoreState {
   ) => void;
   setEffort: (threadId: ThreadId, effort: CodexReasoningEffort | null | undefined) => void;
   setCodexFastMode: (threadId: ThreadId, enabled: boolean | null | undefined) => void;
+  setModelOptions: (threadId: ThreadId, options: ProviderModelOptions) => void;
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
@@ -250,11 +262,42 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
   interactionMode: null,
   effort: null,
   codexFastMode: false,
+  claudeEffort: null,
+  claudeThinking: false,
+  claudeFastMode: false,
+  get modelOptions() {
+    return computeModelOptions(this);
+  },
 }) as ComposerThreadDraftState;
 
 const REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>(
   REASONING_EFFORT_OPTIONS_BY_PROVIDER.codex,
 );
+
+function computeModelOptions(draft: {
+  effort: CodexReasoningEffort | null;
+  codexFastMode: boolean;
+  claudeEffort: ClaudeCodeEffort | null;
+  claudeThinking: boolean;
+  claudeFastMode: boolean;
+}): ProviderModelOptions {
+  const codex: CodexModelOptions | undefined =
+    draft.effort != null || draft.codexFastMode
+      ? {
+          ...(draft.effort != null ? { reasoningEffort: draft.effort } : {}),
+          ...(draft.codexFastMode ? { fastMode: true as const } : {}),
+        }
+      : undefined;
+  const claudeAgent: ClaudeModelOptions | undefined =
+    draft.claudeEffort != null || draft.claudeThinking || draft.claudeFastMode
+      ? {
+          ...(draft.claudeEffort != null ? { effort: draft.claudeEffort } : {}),
+          ...(draft.claudeThinking ? { thinking: true as const } : {}),
+          ...(draft.claudeFastMode ? { fastMode: true as const } : {}),
+        }
+      : undefined;
+  return { ...(codex ? { codex } : {}), ...(claudeAgent ? { claudeAgent } : {}) };
+}
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
@@ -272,6 +315,12 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     interactionMode: null,
     effort: null,
     codexFastMode: false,
+    claudeEffort: null,
+    claudeThinking: false,
+    claudeFastMode: false,
+    get modelOptions() {
+      return computeModelOptions(this);
+    },
   };
 }
 
@@ -747,6 +796,12 @@ function toHydratedThreadDraft(
     interactionMode: persistedDraft.interactionMode ?? null,
     effort: persistedDraft.effort ?? null,
     codexFastMode: persistedDraft.codexFastMode === true,
+    claudeEffort: persistedDraft.claudeEffort ?? null,
+    claudeThinking: persistedDraft.claudeThinking === true,
+    claudeFastMode: persistedDraft.claudeFastMode === true,
+    get modelOptions() {
+      return computeModelOptions(this);
+    },
   };
 }
 
@@ -1274,6 +1329,37 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextDraft: ComposerThreadDraftState = {
             ...base,
             codexFastMode: nextCodexFastMode,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setModelOptions: (threadId, options) => {
+        if (threadId.length === 0) return;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          const base = existing ?? createEmptyThreadDraft();
+          const codex = options.codex;
+          const claude = options.claudeAgent;
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            effort:
+              codex?.reasoningEffort != null
+                ? (codex.reasoningEffort as CodexReasoningEffort)
+                : base.effort,
+            codexFastMode: codex?.fastMode != null ? codex.fastMode : base.codexFastMode,
+            claudeEffort:
+              claude?.effort != null ? (claude.effort as ClaudeCodeEffort) : base.claudeEffort,
+            claudeThinking: claude?.thinking != null ? claude.thinking : base.claudeThinking,
+            claudeFastMode: claude?.fastMode != null ? claude.fastMode : base.claudeFastMode,
+            get modelOptions() {
+              return computeModelOptions(this);
+            },
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {

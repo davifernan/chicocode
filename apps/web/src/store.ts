@@ -484,6 +484,8 @@ export function syncServerReadModel(
           planMarkdown: proposedPlan.planMarkdown,
           createdAt: proposedPlan.createdAt,
           updatedAt: proposedPlan.updatedAt,
+          implementedAt: proposedPlan.implementedAt ?? null,
+          implementationThreadId: proposedPlan.implementationThreadId ?? null,
         })),
         error: thread.session?.lastError ?? null,
         createdAt: thread.createdAt,

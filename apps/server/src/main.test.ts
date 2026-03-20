@@ -13,7 +13,10 @@ import { NetService } from "@t3tools/shared/Net";
 import { CliConfig, recordStartupHeartbeat, t3Cli, type CliConfigShape } from "./main";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { Open, type OpenShape } from "./open";
-import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "./orchestration/Services/ProjectionSnapshotQuery";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./wsServer";
 
@@ -32,6 +35,11 @@ const findAvailablePort = vi.fn((preferred: number) => Effect.succeed(preferred)
 
 // Shared service layer used by this CLI test suite.
 const testLayer = Layer.mergeAll(
+  Layer.succeed(ProjectionSnapshotQuery, {
+    getSnapshot: () => Effect.die("not implemented in test"),
+    getSummarySnapshot: () => Effect.die("not implemented in test"),
+    getThreadMessages: () => Effect.die("not implemented in test"),
+  } satisfies ProjectionSnapshotQueryShape),
   Layer.succeed(CliConfig, {
     cwd: "/tmp/t3-test-workspace",
     fixPath: Effect.void,

@@ -288,8 +288,6 @@ describe("MessagesTimeline", () => {
     // TypeScript enforces this at compile time; this test documents the intent
     // and verifies the component renders without crashing under the new interface.
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    expect(() =>
-      renderToStaticMarkup(<MessagesTimeline {...makeBaseProps()} />),
-    ).not.toThrow();
+    expect(() => renderToStaticMarkup(<MessagesTimeline {...makeBaseProps()} />)).not.toThrow();
   });
 });

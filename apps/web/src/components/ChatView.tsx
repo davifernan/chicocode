@@ -34,6 +34,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { fetchOpenCodeServerStatus, openCodeServerStatusQueryKey } from "~/lib/opencode";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
@@ -160,7 +161,8 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/Expanded
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
-import { CodexTraitsPicker } from "./chat/CodexTraitsPicker";
+import { CodexTraitsPicker, CodexTraitsMenuContent } from "./chat/CodexTraitsPicker";
+import { ClaudeTraitsMenuContent } from "./chat/ClaudeTraitsPicker";
 import { CompactComposerControlsMenu } from "./chat/CompactComposerControlsMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
@@ -1029,11 +1031,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const selectedEffort = composerDraft.effort ?? getDefaultReasoningEffort(selectedProvider);
   const selectedCodexFastModeEnabled =
     selectedProvider === "codex" ? composerDraft.codexFastMode : false;
-  const selectedModelOptionsForDispatch = useMemo(() => {
+  const selectedModelOptionsForDispatch = useMemo(():
+    | import("@t3tools/contracts").ProviderModelOptions
+    | undefined => {
     if (selectedProvider === "codex") {
       const codexOptions = {
-        ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
-        ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
+        ...(supportsReasoningEffort && selectedEffort
+          ? { reasoningEffort: selectedEffort as CodexReasoningEffort }
+          : {}),
+        ...(selectedCodexFastModeEnabled ? { fastMode: true as const } : {}),
       };
       return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
     }
@@ -1058,7 +1064,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const providerOptionsForDispatch = useMemo(() => {
     const hasCodexOverrides = Boolean(settings.codexBinaryPath || settings.codexHomePath);
     const hasOpenCodeOverrides = Boolean(settings.opencodeServerUrl || settings.opencodeBinaryPath);
-    if (!hasCodexOverrides && !hasOpenCodeOverrides) {
+    const hasClaudeOverrides = Boolean(settings.claudeBinaryPath || settings.claudePermissionMode);
+    if (!hasCodexOverrides && !hasOpenCodeOverrides && !hasClaudeOverrides) {
       return undefined;
     }
     return {
@@ -1078,12 +1085,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
             },
           }
         : {}),
+      ...(hasClaudeOverrides
+        ? {
+            claudeAgent: {
+              ...(settings.claudeBinaryPath ? { binaryPath: settings.claudeBinaryPath } : {}),
+              ...(settings.claudePermissionMode
+                ? { permissionMode: settings.claudePermissionMode }
+                : {}),
+            },
+          }
+        : {}),
     };
   }, [
     settings.codexBinaryPath,
     settings.codexHomePath,
     settings.opencodeServerUrl,
     settings.opencodeBinaryPath,
+    settings.claudeBinaryPath,
+    settings.claudePermissionMode,
   ]);
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
@@ -1500,16 +1519,42 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
-  const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+  const rawProviderStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+
+  // Live OpenCode server status — overrides the one-shot startup health check.
+  // Same query key as SettingsPanel so React Query reuses the cache.
+  const openCodeLiveQuery = useQuery({
+    queryKey: openCodeServerStatusQueryKey(settings.opencodeServerUrl),
+    queryFn: () =>
+      fetchOpenCodeServerStatus(
+        settings.opencodeServerUrl ? { serverUrl: settings.opencodeServerUrl } : undefined,
+      ),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+
+  const providerStatuses = useMemo(() => {
+    const liveState = openCodeLiveQuery.data?.state;
+    if (liveState !== "running") return rawProviderStatuses;
+    // OpenCode is actually running — override stale startup warning
+    return rawProviderStatuses.map((s) =>
+      s.provider === "opencode"
+        ? {
+            ...s,
+            status: "ready" as const,
+            authStatus: "authenticated" as const,
+            message: undefined,
+          }
+        : s,
+    );
+  }, [rawProviderStatuses, openCodeLiveQuery.data?.state]);
+
   const activeProvider = activeThread?.session?.provider ?? "codex";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === activeProvider) ?? null,
     [activeProvider, providerStatuses],
   );
-  useEffect(() => {
-    if (activeThread?.provider !== "opencode") return;
-    void serverConfigQuery.refetch();
-  }, [activeThread?.id, activeThread?.provider, serverConfigQuery]);
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const threadTerminalRuntimeEnv = useMemo(() => {
@@ -4747,6 +4792,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         lockedProvider={lockedProvider}
                         modelOptionsByProvider={modelOptionsByProvider}
                         onProviderModelChange={onProviderModelSelect}
+                        providerStatuses={providerStatuses}
                       />
 
                       {isComposerFooterCompact ? (
@@ -4768,12 +4814,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             interactionMode={effectiveInteractionMode}
                             planSidebarOpen={planSidebarOpen}
                             runtimeMode={runtimeMode}
-                            selectedEffort={selectedEffort}
-                            selectedProvider={selectedProvider}
-                            selectedCodexFastModeEnabled={selectedCodexFastModeEnabled}
-                            reasoningOptions={reasoningOptions}
-                            onEffortSelect={onEffortSelect}
-                            onCodexFastModeChange={onCodexFastModeChange}
+                            traitsMenuContent={
+                              selectedProvider === "codex" ? (
+                                <CodexTraitsMenuContent threadId={threadId} />
+                              ) : selectedProvider === "claudeAgent" ? (
+                                <ClaudeTraitsMenuContent
+                                  threadId={threadId}
+                                  model={selectedModel}
+                                  onPromptChange={(prompt) =>
+                                    onPromptChange(prompt, prompt.length, prompt.length, false, [])
+                                  }
+                                />
+                              ) : undefined
+                            }
                             onToggleInteractionMode={toggleInteractionMode}
                             onTogglePlanSidebar={togglePlanSidebar}
                             onToggleRuntimeMode={toggleRuntimeMode}
@@ -4787,13 +4840,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 orientation="vertical"
                                 className="mx-0.5 hidden h-4 sm:block"
                               />
-                              <CodexTraitsPicker
-                                effort={selectedEffort}
-                                fastModeEnabled={selectedCodexFastModeEnabled}
-                                options={reasoningOptions}
-                                onEffortChange={onEffortSelect}
-                                onFastModeChange={onCodexFastModeChange}
-                              />
+                              <CodexTraitsPicker threadId={threadId} />
                             </>
                           ) : null}
 

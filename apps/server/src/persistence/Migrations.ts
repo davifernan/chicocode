@@ -25,11 +25,19 @@ import Migration0010 from "./Migrations/010_ProjectionThreadsRuntimeMode.ts";
 import Migration0011 from "./Migrations/011_OrchestrationThreadCreatedRuntimeMode.ts";
 import Migration0012 from "./Migrations/012_ProjectionThreadsInteractionMode.ts";
 import Migration0013 from "./Migrations/013_ProjectionThreadProposedPlans.ts";
-import Migration0014 from "./Migrations/014_ProviderBindings.ts";
-import Migration0015 from "./Migrations/015_UiState.ts";
-import Migration0016 from "./Migrations/016_ProviderThreadCatalogMirrorState.ts";
+// feat/both-providers migrations (14-15)
+import Migration0014 from "./Migrations/014_ProjectionThreadProposedPlanImplementation.ts";
+import Migration0015 from "./Migrations/015_ProjectionTurnsSourceProposedPlan.ts";
+// main branch migrations (17-18) — new tables: sync_cursors, dev_server_pids
 import Migration0017 from "./Migrations/017_SyncCursors.ts";
 import Migration0018 from "./Migrations/018_DevServerPids.ts";
+// Idempotent OpenCode migrations (21-23) — PRAGMA-checked, safe on any DB state.
+// 21: provider_kind/source/external columns on threads + provider_thread_catalog table
+// 22: ui_state table
+// 23: mirrored_external_updated_at/mirror_synced_at on provider_thread_catalog
+import Migration0021 from "./Migrations/021_ProviderBindings.ts";
+import Migration0022 from "./Migrations/022_UiState.ts";
+import Migration0023 from "./Migrations/023_ProviderThreadCatalogMirrorState.ts";
 import { Effect } from "effect";
 
 /**
@@ -56,11 +64,13 @@ const loader = Migrator.fromRecord({
   "11_OrchestrationThreadCreatedRuntimeMode": Migration0011,
   "12_ProjectionThreadsInteractionMode": Migration0012,
   "13_ProjectionThreadProposedPlans": Migration0013,
-  "14_ProviderBindings": Migration0014,
-  "15_UiState": Migration0015,
-  "16_ProviderThreadCatalogMirrorState": Migration0016,
+  "14_ProjectionThreadProposedPlanImplementation": Migration0014,
+  "15_ProjectionTurnsSourceProposedPlan": Migration0015,
   "17_SyncCursors": Migration0017,
   "18_DevServerPids": Migration0018,
+  "21_ProviderBindings": Migration0021,
+  "22_UiState": Migration0022,
+  "23_ProviderThreadCatalogMirrorState": Migration0023,
 });
 
 /**

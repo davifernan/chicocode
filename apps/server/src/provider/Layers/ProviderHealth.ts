@@ -15,7 +15,7 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
-import { Array, Effect, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
+import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -29,6 +29,8 @@ import { openCodeServerControl } from "../../opencode/OpenCodeProcessManager.ts"
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
+const OPENCODE_PROVIDER = "opencode" as const;
+const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -47,12 +49,7 @@ function nonEmptyTrimmed(value: string | undefined): string | undefined {
 function isCommandMissingCause(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const lower = error.message.toLowerCase();
-  return (
-    lower.includes("command not found: codex") ||
-    lower.includes("spawn codex enoent") ||
-    lower.includes("enoent") ||
-    lower.includes("notfound")
-  );
+  return lower.includes("enoent") || lower.includes("notfound");
 }
 
 function detailFromResult(
@@ -89,49 +86,6 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
     if (nested !== undefined) return nested;
   }
   return undefined;
-}
-
-function getExecutableCandidates(name: string): ReadonlyArray<string> {
-  if (process.platform !== "win32") {
-    return [name];
-  }
-
-  const pathExt = process.env.PATHEXT?.split(";")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0) ?? [".exe", ".cmd", ".bat"];
-
-  return [name, ...pathExt.map((ext) => `${name}${ext.toLowerCase()}`)];
-}
-
-function getPathSearchDirectories(): ReadonlyArray<string> {
-  const rawPath = process.env.PATH;
-  if (!rawPath) return [];
-  return rawPath
-    .split(NodePath.delimiter)
-    .map((entry) => entry.trim())
-    .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index);
-}
-
-function getOpenCodeBinaryCandidates(path: Path.Path): ReadonlyArray<string> {
-  const homeDir = OS.homedir();
-  const candidates = new Set<string>();
-
-  for (const directory of getPathSearchDirectories()) {
-    for (const executable of getExecutableCandidates("opencode")) {
-      candidates.add(path.join(directory, executable));
-    }
-  }
-
-  for (const knownPath of [
-    path.join(homeDir, ".local", "bin", "opencode"),
-    path.join(homeDir, "go", "bin", "opencode"),
-    "/usr/local/bin/opencode",
-    "/opt/homebrew/bin/opencode",
-  ]) {
-    candidates.add(knownPath);
-  }
-
-  return [...candidates];
 }
 
 export function parseAuthStatusFromOutput(result: CommandResult): {
@@ -310,6 +264,27 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
+const runClaudeCommand = (args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const command = ChildProcess.make("claude", [...args], {
+      shell: process.platform === "win32",
+    });
+
+    const child = yield* spawner.spawn(command);
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        collectStreamAsString(child.stdout),
+        collectStreamAsString(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    return { stdout, stderr, code: exitCode } satisfies CommandResult;
+  }).pipe(Effect.scoped);
+
 // ── Health check ────────────────────────────────────────────────────
 
 export const checkCodexProviderStatus: Effect.Effect<
@@ -436,9 +411,227 @@ export const checkCodexProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
-// ── OpenCode health check ───────────────────────────────────────────
+// ── Claude Agent health check ───────────────────────────────────────
 
-const OPENCODE_PROVIDER = "opencode" as const;
+export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+} {
+  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
+
+  if (
+    lowerOutput.includes("unknown command") ||
+    lowerOutput.includes("unrecognized command") ||
+    lowerOutput.includes("unexpected argument")
+  ) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message:
+        "Claude Agent authentication status command is unavailable in this version of Claude.",
+    };
+  }
+
+  if (
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("login required") ||
+    lowerOutput.includes("authentication required") ||
+    lowerOutput.includes("run `claude login`") ||
+    lowerOutput.includes("run claude login")
+  ) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Claude is not authenticated. Run `claude auth login` and try again.",
+    };
+  }
+
+  // `claude auth status` returns JSON with a `loggedIn` boolean.
+  const parsedAuth = (() => {
+    const trimmed = result.stdout.trim();
+    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+    }
+    try {
+      return {
+        attemptedJsonParse: true as const,
+        auth: extractAuthBoolean(JSON.parse(trimmed)),
+      };
+    } catch {
+      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+    }
+  })();
+
+  if (parsedAuth.auth === true) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+  if (parsedAuth.auth === false) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Claude is not authenticated. Run `claude auth login` and try again.",
+    };
+  }
+  if (parsedAuth.attemptedJsonParse) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message:
+        "Could not verify Claude authentication status from JSON output (missing auth marker).",
+    };
+  }
+  if (result.code === 0) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+
+  const detail = detailFromResult(result);
+  return {
+    status: "warning",
+    authStatus: "unknown",
+    message: detail
+      ? `Could not verify Claude authentication status. ${detail}`
+      : "Could not verify Claude authentication status.",
+  };
+}
+
+export const checkClaudeProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+
+  // Probe 1: `claude --version` — is the CLI reachable?
+  const versionProbe = yield* runClaudeCommand(["--version"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(versionProbe)) {
+    const error = versionProbe.failure;
+    return {
+      provider: CLAUDE_AGENT_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: isCommandMissingCause(error)
+        ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
+        : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+    };
+  }
+
+  if (Option.isNone(versionProbe.success)) {
+    return {
+      provider: CLAUDE_AGENT_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Claude Agent CLI is installed but failed to run. Timed out while running command.",
+    };
+  }
+
+  const version = versionProbe.success.value;
+  if (version.code !== 0) {
+    const detail = detailFromResult(version);
+    return {
+      provider: CLAUDE_AGENT_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `Claude Agent CLI is installed but failed to run. ${detail}`
+        : "Claude Agent CLI is installed but failed to run.",
+    };
+  }
+
+  // Probe 2: `claude auth status` — is the user authenticated?
+  const authProbe = yield* runClaudeCommand(["auth", "status"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(authProbe)) {
+    const error = authProbe.failure;
+    return {
+      provider: CLAUDE_AGENT_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message:
+        error instanceof Error
+          ? `Could not verify Claude authentication status: ${error.message}.`
+          : "Could not verify Claude authentication status.",
+    };
+  }
+
+  if (Option.isNone(authProbe.success)) {
+    return {
+      provider: CLAUDE_AGENT_PROVIDER,
+      status: "warning" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Could not verify Claude authentication status. Timed out while running command.",
+    };
+  }
+
+  const parsed = parseClaudeAuthStatusFromOutput(authProbe.success.value);
+  return {
+    provider: CLAUDE_AGENT_PROVIDER,
+    status: parsed.status,
+    available: true,
+    authStatus: parsed.authStatus,
+    checkedAt,
+    ...(parsed.message ? { message: parsed.message } : {}),
+  } satisfies ServerProviderStatus;
+});
+
+// ── OpenCode helpers ────────────────────────────────────────────────
+
+function getExecutableCandidates(name: string): ReadonlyArray<string> {
+  if (process.platform !== "win32") {
+    return [name];
+  }
+  const pathExt = process.env.PATHEXT?.split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0) ?? [".exe", ".cmd", ".bat"];
+  return [name, ...pathExt.map((ext) => `${name}${ext.toLowerCase()}`)];
+}
+
+function getPathSearchDirectories(): ReadonlyArray<string> {
+  const rawPath = process.env.PATH;
+  if (!rawPath) return [];
+  return rawPath
+    .split(NodePath.delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index);
+}
+
+function getOpenCodeBinaryCandidates(path: Path.Path): ReadonlyArray<string> {
+  const homeDir = OS.homedir();
+  const candidates = new Set<string>();
+  for (const directory of getPathSearchDirectories()) {
+    for (const executable of getExecutableCandidates("opencode")) {
+      candidates.add(path.join(directory, executable));
+    }
+  }
+  for (const knownPath of [
+    path.join(homeDir, ".local", "bin", "opencode"),
+    path.join(homeDir, "go", "bin", "opencode"),
+    "/usr/local/bin/opencode",
+    "/opt/homebrew/bin/opencode",
+  ]) {
+    candidates.add(knownPath);
+  }
+  return [...candidates];
+}
+
+// ── OpenCode health check ───────────────────────────────────────────
 
 export const checkOpenCodeProviderStatus: Effect.Effect<
   ServerProviderStatus,
@@ -451,7 +644,6 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
     catch: () => openCodeServerControl.getStatus(),
   }).pipe(Effect.orElseSucceed(() => openCodeServerControl.getStatus()));
 
-  // Probe 1: Try to reach the OpenCode server via /global/health.
   const credentials = openCodeServerControl.getCredentials();
   const serverUrl = credentials.url;
   const username = credentials.username;
@@ -465,9 +657,7 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
         headers: { Authorization: authHeader },
         signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
       });
-      if (!resp.ok) {
-        return { healthy: false, reachable: true };
-      }
+      if (!resp.ok) return { healthy: false, reachable: true };
       try {
         const body = (await resp.json()) as { healthy?: boolean; version?: string };
         return { healthy: body.healthy === true, reachable: true, version: body.version };
@@ -478,19 +668,15 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
     catch: () => ({ healthy: false, reachable: false }),
   }).pipe(Effect.orElseSucceed(() => ({ healthy: false, reachable: false }) as const));
 
-  // Probe 2: Check if auth.json exists and has valid entries.
   const authManager = new OpenCodeAuthManager();
   const authStatus = yield* Effect.tryPromise({
     try: () => authManager.getAuthStatus(),
     catch: () => "unknown" as const,
   }).pipe(Effect.orElseSucceed(() => "unknown" as const));
 
-  // If the server is not reachable, check for the opencode binary.
   if (!healthProbe.reachable) {
-    // OpenCode server is not running — check if the CLI is at least installed.
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-
     let binaryFound = false;
     for (const binPath of getOpenCodeBinaryCandidates(path)) {
       const exists = yield* fileSystem.exists(binPath).pipe(Effect.orElseSucceed(() => false));
@@ -499,7 +685,6 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
         break;
       }
     }
-
     if (!binaryFound) {
       return {
         provider: OPENCODE_PROVIDER,
@@ -511,7 +696,6 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
           "OpenCode server is not running and the `opencode` binary was not found on PATH or in common locations.",
       };
     }
-
     return {
       provider: OPENCODE_PROVIDER,
       status: "warning" as const,
@@ -536,7 +720,6 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
     };
   }
 
-  // Server is healthy.
   const authStatusFinal: ServerProviderAuthStatus =
     authStatus === "authenticated"
       ? "authenticated"
@@ -563,17 +746,13 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+    const statusesFiber = yield* Effect.all(
+      [checkCodexProviderStatus, checkOpenCodeProviderStatus, checkClaudeProviderStatus],
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkScoped);
 
     return {
-      getStatuses: Effect.all([checkCodexProviderStatus, checkOpenCodeProviderStatus]).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        Effect.map(([codexStatus, openCodeStatus]) => [codexStatus, openCodeStatus]),
-      ),
+      getStatuses: Fiber.join(statusesFiber),
     } satisfies ProviderHealthShape;
   }),
 );
