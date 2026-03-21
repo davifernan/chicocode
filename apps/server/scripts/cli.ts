@@ -150,6 +150,15 @@ const buildCmd = Command.make(
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
+
+      // Copy .proto files next to the bundle so @grpc/proto-loader can find them
+      // at runtime (it resolves paths relative to the bundle's __dirname = dist/).
+      const protoSrc = path.join(serverDir, "src/chico/proto");
+      const protoDest = path.join(serverDir, "dist/proto");
+      if (yield* fs.exists(protoSrc)) {
+        yield* fs.copy(protoSrc, protoDest);
+        yield* Effect.log("[cli] Copied proto files to dist/proto");
+      }
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
 

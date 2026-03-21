@@ -1567,7 +1567,7 @@ export default function Sidebar() {
           </button>
           <button
             type="button"
-            onClick={() => void navigate({ to: "/chico/" })}
+            onClick={() => void navigate({ to: "/chico" })}
             className={cn(
               "flex-1 rounded-sm px-2.5 py-1 text-[11px] font-medium transition-all",
               isOnChico

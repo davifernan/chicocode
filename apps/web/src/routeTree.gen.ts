@@ -11,12 +11,11 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as DevServerPreviewRouteImport } from './routes/dev-server-preview'
 import { Route as DevLogsPopoutRouteImport } from './routes/dev-logs-popout'
+import { Route as ChicoRouteImport } from './routes/chico'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
-import { Route as ChicoRouteImport } from './routes/_chico'
-import { Route as ChicoIndexRouteImport } from './routes/_chico.index'
 
 const DevServerPreviewRoute = DevServerPreviewRouteImport.update({
   id: '/dev-server-preview',
@@ -26,6 +25,11 @@ const DevServerPreviewRoute = DevServerPreviewRouteImport.update({
 const DevLogsPopoutRoute = DevLogsPopoutRouteImport.update({
   id: '/dev-logs-popout',
   path: '/dev-logs-popout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChicoRoute = ChicoRouteImport.update({
+  id: '/chico',
+  path: '/chico',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -47,82 +51,66 @@ const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
   path: '/$threadId',
   getParentRoute: () => ChatRoute,
 } as any)
-const ChicoRoute = ChicoRouteImport.update({
-  id: '/_chico',
-  path: '/chico',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ChicoIndexRoute = ChicoIndexRouteImport.update({
-  id: '/chico/',
-  path: '/',
-  getParentRoute: () => ChicoRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
+  '/chico': typeof ChicoRoute
   '/dev-logs-popout': typeof DevLogsPopoutRoute
   '/dev-server-preview': typeof DevServerPreviewRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/settings': typeof ChatSettingsRoute
-  '/chico': typeof ChicoRouteWithChildren
-  '/chico/': typeof ChicoIndexRoute
 }
 export interface FileRoutesByTo {
+  '/chico': typeof ChicoRoute
   '/dev-logs-popout': typeof DevLogsPopoutRoute
   '/dev-server-preview': typeof DevServerPreviewRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/settings': typeof ChatSettingsRoute
   '/': typeof ChatIndexRoute
-  '/chico': typeof ChicoRouteWithChildren
-  '/chico/': typeof ChicoIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
+  '/chico': typeof ChicoRoute
   '/dev-logs-popout': typeof DevLogsPopoutRoute
   '/dev-server-preview': typeof DevServerPreviewRoute
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/': typeof ChatIndexRoute
-  '/_chico': typeof ChicoRouteWithChildren
-  '/_chico/': typeof ChicoIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/chico'
     | '/dev-logs-popout'
     | '/dev-server-preview'
     | '/$threadId'
     | '/settings'
-    | '/chico'
-    | '/chico/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/chico'
     | '/dev-logs-popout'
     | '/dev-server-preview'
     | '/$threadId'
     | '/settings'
     | '/'
-    | '/chico'
-    | '/chico/'
   id:
     | '__root__'
     | '/_chat'
+    | '/chico'
     | '/dev-logs-popout'
     | '/dev-server-preview'
     | '/_chat/$threadId'
     | '/_chat/settings'
     | '/_chat/'
-    | '/_chico'
-    | '/_chico/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
+  ChicoRoute: typeof ChicoRoute
   DevLogsPopoutRoute: typeof DevLogsPopoutRoute
   DevServerPreviewRoute: typeof DevServerPreviewRoute
-  ChicoRoute: typeof ChicoRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -139,6 +127,13 @@ declare module '@tanstack/react-router' {
       path: '/dev-logs-popout'
       fullPath: '/dev-logs-popout'
       preLoaderRoute: typeof DevLogsPopoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chico': {
+      id: '/chico'
+      path: '/chico'
+      fullPath: '/chico'
+      preLoaderRoute: typeof ChicoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -169,20 +164,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
-    '/_chico': {
-      id: '/_chico'
-      path: '/chico'
-      fullPath: '/chico'
-      preLoaderRoute: typeof ChicoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_chico/': {
-      id: '/_chico/'
-      path: '/'
-      fullPath: '/chico/'
-      preLoaderRoute: typeof ChicoIndexRouteImport
-      parentRoute: typeof ChicoRoute
-    }
   }
 }
 
@@ -200,21 +181,11 @@ const ChatRouteChildren: ChatRouteChildren = {
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
-interface ChicoRouteChildren {
-  ChicoIndexRoute: typeof ChicoIndexRoute
-}
-
-const ChicoRouteChildren: ChicoRouteChildren = {
-  ChicoIndexRoute: ChicoIndexRoute,
-}
-
-const ChicoRouteWithChildren = ChicoRoute._addFileChildren(ChicoRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
+  ChicoRoute: ChicoRoute,
   DevLogsPopoutRoute: DevLogsPopoutRoute,
   DevServerPreviewRoute: DevServerPreviewRoute,
-  ChicoRoute: ChicoRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
