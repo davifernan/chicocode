@@ -13,11 +13,13 @@
 
 import { useMemo } from "react";
 import { useChicoStore } from "../../chico/chicoStore";
+import { isElectron } from "../../env";
 import { ChicoServerInfo } from "./ChicoServerInfo";
 import { RunGrid } from "./RunGrid";
 import { RunMiniBar } from "./RunMiniBar";
 import { RunDetail } from "./RunDetail";
-import { Loader2Icon } from "lucide-react";
+import { ActivityIcon, Loader2Icon } from "lucide-react";
+import { cn } from "../../lib/utils";
 
 export function ChicoCenter() {
   const isBootstrapping = useChicoStore((s) => s.isBootstrapping);
@@ -44,9 +46,14 @@ export function ChicoCenter() {
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-background">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       {/* Top bar: title + server info */}
-      <div className="flex items-center justify-between gap-4 px-4 py-2.5 border-b border-border shrink-0">
+      <div
+        className={cn(
+          "flex items-center justify-between gap-4 border-b border-border shrink-0",
+          isElectron ? "drag-region h-[52px] px-5" : "px-4 py-2.5",
+        )}
+      >
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">Chico Central</span>
           {runs.length > 0 && (
@@ -79,6 +86,24 @@ export function ChicoCenter() {
             onClearSelection={() => selectRun(null)}
           />
           <RunDetail run={selectedRun} />
+        </div>
+      ) : runs.length === 0 ? (
+        <div className="flex min-h-0 min-w-0 flex-1 w-full items-center justify-center px-6 py-10">
+          <div className="flex max-w-sm flex-col items-center justify-center gap-4 text-center">
+            <div className="rounded-full bg-muted/50 p-4">
+              <ActivityIcon className="size-8 text-muted-foreground/40" />
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-foreground">No runs connected</p>
+              <p className="text-xs text-muted-foreground">
+                Start a Chico run with{" "}
+                <span className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                  CHICO_GRPC_ENDPOINT
+                </span>{" "}
+                pointing to this server.
+              </p>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
