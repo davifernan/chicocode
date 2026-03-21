@@ -40,7 +40,12 @@ import {
   TerminalWriteInput,
 } from "./terminal";
 import { KeybindingRule } from "./keybindings";
-import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
+import {
+  ProjectSearchEntriesInput,
+  ProjectWriteFileInput,
+  ProjectResolveGitReposInput,
+  ProjectGitCloneInput,
+} from "./project";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
@@ -115,6 +120,10 @@ export const WS_METHODS = {
   syncExportThreadEvents: "sync.exportThreadEvents",
   syncReceiveEvents: "sync.receiveEvents",
 
+  // Project git operations (used during remote-connect sync)
+  projectResolveGitRepos: "project.resolveGitRepos",
+  projectGitClone: "project.gitClone",
+
   // Dev server
   devServerStart: DEV_SERVER_WS_METHODS.start,
   devServerRestart: DEV_SERVER_WS_METHODS.restart,
@@ -165,6 +174,10 @@ const WebSocketRequestBody = Schema.Union([
   // Project Search
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
+
+  // Project git operations
+  tagRequestBody(WS_METHODS.projectResolveGitRepos, ProjectResolveGitReposInput),
+  tagRequestBody(WS_METHODS.projectGitClone, ProjectGitCloneInput),
 
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),

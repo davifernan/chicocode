@@ -53,6 +53,10 @@ import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+import {
+  RemoteHostService,
+  type RemoteHostServiceShape,
+} from "./remoteHost/Services/RemoteHostService.ts";
 
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -482,6 +486,7 @@ describe("WebSocket Server", () => {
       gitManager?: GitManagerShape;
       gitCore?: Pick<GitCoreShape, "listBranches" | "initRepo" | "pullCurrentBranch">;
       terminalManager?: TerminalManagerShape;
+      remoteHostService?: RemoteHostServiceShape;
     } = {},
   ): Promise<Http.Server> {
     if (serverScope) {
@@ -519,6 +524,9 @@ describe("WebSocket Server", () => {
         : Layer.empty,
       options.terminalManager
         ? Layer.succeed(TerminalManager, options.terminalManager)
+        : Layer.empty,
+      options.remoteHostService
+        ? Layer.succeed(RemoteHostService, options.remoteHostService)
         : Layer.empty,
     );
 
@@ -631,6 +639,130 @@ describe("WebSocket Server", () => {
     expect(response.headers.get("content-type")).toContain("image/png");
     const bytes = Buffer.from(await response.arrayBuffer());
     expect(bytes).toEqual(Buffer.from("hello-encoded-attachment"));
+  });
+
+  it("returns 404 for attachment not found locally (no tunnel)", async () => {
+    const stateDir = makeTempDir("t3code-state-attach-404-");
+    server = await createTestServer({ cwd: "/test/project", stateDir });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/attachments/nonexistent-attachment-id`);
+    expect(response.status).toBe(404);
+  });
+
+  it("proxies attachment request to tunnel when not found locally", async () => {
+    // Spin up a minimal HTTP server to act as the "remote T3 server"
+    const remoteContent = Buffer.from("proxied-from-remote");
+    const remoteServer = Http.createServer((_req, res) => {
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Content-Length": String(remoteContent.length),
+      });
+      res.end(remoteContent);
+    });
+    await new Promise<void>((resolve) => remoteServer.listen(0, "127.0.0.1", resolve));
+    const remoteAddr = remoteServer.address();
+    const remotePort = typeof remoteAddr === "object" && remoteAddr !== null ? remoteAddr.port : 0;
+    const tunnelWsUrl = `ws://127.0.0.1:${remotePort}`;
+
+    // Mock RemoteHostService to report "connected" with the fake remote port
+    const mockRemoteHostService: RemoteHostServiceShape = {
+      applyConfig: () => Effect.void,
+      getConnectionStatus: () =>
+        Effect.succeed({
+          status: "connected",
+          step: null,
+          tunnelWsUrl,
+          error: null,
+          connectedAt: new Date().toISOString(),
+        }),
+      subscribeToStatus: () => Stream.empty,
+    };
+
+    const stateDir = makeTempDir("t3code-state-attach-proxy-");
+    server = await createTestServer({
+      cwd: "/test/project",
+      stateDir,
+      remoteHostService: mockRemoteHostService,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    try {
+      // Request an attachment that does NOT exist locally — should be proxied
+      const response = await fetch(`http://127.0.0.1:${port}/attachments/does-not-exist-locally`);
+      expect(response.status).toBe(200);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      expect(bytes).toEqual(remoteContent);
+    } finally {
+      await new Promise<void>((resolve) => remoteServer.close(() => resolve()));
+    }
+  });
+
+  it("returns 404 when attachment not found locally and tunnel is disconnected", async () => {
+    const mockRemoteHostService: RemoteHostServiceShape = {
+      applyConfig: () => Effect.void,
+      getConnectionStatus: () =>
+        Effect.succeed({
+          status: "disconnected",
+          step: null,
+          tunnelWsUrl: null,
+          error: null,
+          connectedAt: null,
+        }),
+      subscribeToStatus: () => Stream.empty,
+    };
+
+    const stateDir = makeTempDir("t3code-state-attach-disconnected-");
+    server = await createTestServer({
+      cwd: "/test/project",
+      stateDir,
+      remoteHostService: mockRemoteHostService,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/attachments/does-not-exist-locally`);
+    expect(response.status).toBe(404);
+  });
+
+  it("serves local attachment even when tunnel is connected (local-first)", async () => {
+    const stateDir = makeTempDir("t3code-state-attach-local-first-");
+    // Write an attachment to the local stateDir
+    const attachmentId = "local-test-attachment-id";
+    fs.mkdirSync(path.join(stateDir, "attachments"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "attachments", `${attachmentId}.png`),
+      Buffer.from("local-content"),
+    );
+
+    // Even with a "connected" tunnel, local file should be served directly
+    const mockRemoteHostService: RemoteHostServiceShape = {
+      applyConfig: () => Effect.void,
+      getConnectionStatus: () =>
+        Effect.succeed({
+          status: "connected",
+          step: null,
+          tunnelWsUrl: "ws://127.0.0.1:9999",
+          error: null,
+          connectedAt: new Date().toISOString(),
+        }),
+      subscribeToStatus: () => Stream.empty,
+    };
+
+    server = await createTestServer({
+      cwd: "/test/project",
+      stateDir,
+      remoteHostService: mockRemoteHostService,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/attachments/${attachmentId}`);
+    expect(response.status).toBe(200);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    expect(bytes).toEqual(Buffer.from("local-content"));
   });
 
   it("serves static index for root path", async () => {

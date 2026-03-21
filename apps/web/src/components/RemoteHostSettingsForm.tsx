@@ -36,6 +36,8 @@ export const REMOTE_HOST_EMPTY_CONFIG: RemoteHostConfig = {
   remoteServerPort: 3773,
   remoteAuthToken: null,
   enabled: false,
+  autoCloneGitProjects: true,
+  remoteWorkspaceBase: "",
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -199,6 +201,33 @@ export function RemoteHostSettingsForm() {
             />
           </div>
         </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Remote Workspace Path <span className="text-muted-foreground/50">(for auto-clone)</span>
+          </label>
+          <Input
+            value={config.remoteWorkspaceBase}
+            onChange={(e) => setConfig((c) => ({ ...c, remoteWorkspaceBase: e.target.value }))}
+            placeholder="/home/user/projects"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Absolute path on the remote server where git projects will be cloned.
+          </p>
+        </div>
+      </div>
+
+      {/* Auto git clone toggle */}
+      <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+        <div>
+          <p className="text-sm font-medium text-foreground">Auto-clone git projects</p>
+          <p className="text-xs text-muted-foreground">
+            Automatically clone local git projects to the remote server on connect.
+          </p>
+        </div>
+        <Switch
+          checked={config.autoCloneGitProjects}
+          onCheckedChange={(checked) => setConfig((c) => ({ ...c, autoCloneGitProjects: checked }))}
+        />
       </div>
 
       {/* Test connection */}

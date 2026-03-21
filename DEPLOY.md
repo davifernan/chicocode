@@ -199,12 +199,12 @@ sudo chmod 600 /etc/ssl/cloudflare/code.nilo.live.key
 
 ## 6. Cloudflare DNS & Proxy Settings
 
-| Setting | Value |
-|---|---|
-| DNS A Record | `code.nilo.live → <SERVER_IP>` · Proxied (orange cloud ON) |
-| SSL/TLS Mode | **Full (strict)** |
-| WebSockets | **On** — Network → WebSockets |
-| Minimum TLS Version | TLS 1.2 |
+| Setting             | Value                                                      |
+| ------------------- | ---------------------------------------------------------- |
+| DNS A Record        | `code.nilo.live → <SERVER_IP>` · Proxied (orange cloud ON) |
+| SSL/TLS Mode        | **Full (strict)**                                          |
+| WebSockets          | **On** — Network → WebSockets                              |
+| Minimum TLS Version | TLS 1.2                                                    |
 
 > **WebSockets must be ON.** Without it the UI loads but immediately disconnects.
 
@@ -229,7 +229,7 @@ sudo ufw enable
 3. Enter:
    - **Host:** `code.nilo.live`
    - **Port:** `443`
-   - **Auth Token:** *(the token from step 2)*
+   - **Auth Token:** _(the token from step 2)_
    - **Use TLS:** on
 4. Click **Connect**
 
@@ -249,13 +249,13 @@ sudo systemctl restart t3code
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| UI loads but WS disconnects instantly | Cloudflare **WebSockets is OFF** — enable under Network → WebSockets |
-| `401` on WS connection | Token mismatch — check `/etc/t3code/env` vs UI input |
-| 502 Bad Gateway | Service not running — `systemctl status t3code` |
-| Blank page | Nginx missing `Upgrade`/`Connection` headers |
-| `codex: command not found` | Install for t3code user: `sudo -u t3code npm install -g @openai/codex` |
+| Symptom                               | Fix                                                                    |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| UI loads but WS disconnects instantly | Cloudflare **WebSockets is OFF** — enable under Network → WebSockets   |
+| `401` on WS connection                | Token mismatch — check `/etc/t3code/env` vs UI input                   |
+| 502 Bad Gateway                       | Service not running — `systemctl status t3code`                        |
+| Blank page                            | Nginx missing `Upgrade`/`Connection` headers                           |
+| `codex: command not found`            | Install for t3code user: `sudo -u t3code npm install -g @openai/codex` |
 
 ---
 

@@ -215,6 +215,38 @@ export interface GitCoreShape {
    * List local branch names (short format).
    */
   readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+
+  /**
+   * Check whether a directory is the root of a git repository.
+   * Returns false for non-existent paths or non-repo directories — never errors.
+   */
+  readonly isGitRepository: (cwd: string) => Effect.Effect<boolean>;
+
+  /**
+   * Get the currently checked-out branch name.
+   * Returns "HEAD" if in detached HEAD state, or "main" as fallback on error.
+   */
+  readonly getCurrentBranch: (cwd: string) => Effect.Effect<string>;
+
+  /**
+   * Read the fetch URL for a git remote (defaults to "origin").
+   * Returns null if the remote does not exist or has no URL.
+   */
+  readonly getRemoteUrl: (
+    cwd: string,
+    remoteName?: string,
+  ) => Effect.Effect<string | null, GitCommandError>;
+
+  /**
+   * Clone a git repository to a target path.
+   * If `branch` is provided, checks out that branch after cloning.
+   * The parent directory of `targetPath` must exist.
+   */
+  readonly cloneRepo: (
+    remoteUrl: string,
+    targetPath: string,
+    branch?: string,
+  ) => Effect.Effect<void, GitCommandError>;
 }
 
 /**

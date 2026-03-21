@@ -12,6 +12,17 @@ export const RemoteHostConfig = Schema.Struct({
   remoteServerPort: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   remoteAuthToken: Schema.NullOr(Schema.String),
   enabled: Schema.Boolean,
+  /**
+   * When enabled, automatically git-clone local projects on the remote server
+   * during the connection sync phase. Defaults to true.
+   */
+  autoCloneGitProjects: Schema.Boolean,
+  /**
+   * Absolute path on the remote server where projects will be cloned.
+   * e.g. "/home/user/projects". Project directories will be created as
+   * sub-directories of this base path, mirroring the local project name.
+   */
+  remoteWorkspaceBase: Schema.String,
 });
 export type RemoteHostConfig = typeof RemoteHostConfig.Type;
 
@@ -79,6 +90,7 @@ export const RemoteSyncStatus = Schema.Struct({
   status: Schema.Literals(["idle", "syncing", "done", "error"]),
   total: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   pushed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  pulled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   skipped: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   diverged: Schema.Array(Schema.String),
   error: Schema.NullOr(Schema.String),
