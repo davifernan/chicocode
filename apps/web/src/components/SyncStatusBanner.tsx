@@ -62,14 +62,19 @@ export function SyncStatusBanner() {
         <span>
           <span className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
           {syncStatus.total > 0
-            ? `Syncing ${syncStatus.pushed}/${syncStatus.total} chats to remote…`
+            ? `Syncing ${syncStatus.pushed + syncStatus.pulled}/${syncStatus.total} chats…`
             : "Preparing sync…"}
         </span>
       )}
 
       {isDone && (
         <span>
-          {`Synced — ${syncStatus.pushed} new`}
+          {"Synced"}
+          {syncStatus.pushed > 0 ? ` — ${syncStatus.pushed} uploaded` : ""}
+          {syncStatus.pulled > 0
+            ? `${syncStatus.pushed > 0 ? ", " : " — "}${syncStatus.pulled} downloaded`
+            : ""}
+          {syncStatus.pushed === 0 && syncStatus.pulled === 0 ? " — up to date" : ""}
           {syncStatus.skipped > 0 ? `, ${syncStatus.skipped} skipped` : ""}
           {syncStatus.diverged.length > 0 ? ` · ⚠ ${syncStatus.diverged.length} diverged` : ""}
         </span>

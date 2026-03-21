@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 import { Cache, Data, Duration, Effect, Exit, FileSystem, Layer, Path } from "effect";
 
 import { GitCommandError } from "../Errors.ts";
@@ -1401,6 +1402,41 @@ const makeGitCore = Effect.gen(function* () {
       ),
     );
 
+  const getCurrentBranch: GitCoreShape["getCurrentBranch"] = (cwd) =>
+    runGitStdout("GitCore.getCurrentBranch", cwd, ["rev-parse", "--abbrev-ref", "HEAD"], true).pipe(
+      Effect.map((stdout) => stdout.trim() || "HEAD"),
+      Effect.catch(() => Effect.succeed("main")),
+    );
+
+  const isGitRepository: GitCoreShape["isGitRepository"] = (cwd) =>
+    executeGit("GitCore.isGitRepository", cwd, ["rev-parse", "--git-dir"], {
+      timeoutMs: 5_000,
+      allowNonZeroExit: true,
+    }).pipe(
+      Effect.map((result) => result.code === 0),
+      Effect.catch(() => Effect.succeed(false)),
+    );
+
+  const getRemoteUrl: GitCoreShape["getRemoteUrl"] = (cwd, remoteName = "origin") =>
+    runGitStdout("GitCore.getRemoteUrl", cwd, ["remote", "get-url", remoteName], true).pipe(
+      Effect.map((stdout) => stdout.trim() || null),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+
+  const cloneRepo: GitCoreShape["cloneRepo"] = (remoteUrl, targetPath, branch) => {
+    const args = ["clone"];
+    if (branch) {
+      args.push("--branch", branch);
+    }
+    args.push("--", remoteUrl, targetPath);
+    // Clone into the parent directory so git creates the target dir itself
+    const parentDir = nodePath.dirname(targetPath);
+    return executeGit("GitCore.cloneRepo", parentDir, args, {
+      timeoutMs: 5 * 60_000, // 5 minutes for large repos
+      fallbackErrorMessage: `git clone failed for ${remoteUrl}`,
+    }).pipe(Effect.asVoid);
+  };
+
   return {
     status,
     statusDetails,
@@ -1422,6 +1458,10 @@ const makeGitCore = Effect.gen(function* () {
     checkoutBranch,
     initRepo,
     listLocalBranchNames,
+    getCurrentBranch,
+    isGitRepository,
+    getRemoteUrl,
+    cloneRepo,
   } satisfies GitCoreShape;
 });
 

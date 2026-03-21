@@ -115,6 +115,10 @@ const makeIsolatedGitCore = (gitService: GitServiceShape) =>
       checkoutBranch: (input) => core.checkoutBranch(input),
       initRepo: (input) => core.initRepo(input),
       listLocalBranchNames: (cwd) => core.listLocalBranchNames(cwd),
+      getCurrentBranch: (cwd) => core.getCurrentBranch(cwd),
+      isGitRepository: (cwd) => core.isGitRepository(cwd),
+      getRemoteUrl: (cwd, remoteName) => core.getRemoteUrl(cwd, remoteName),
+      cloneRepo: (remoteUrl, targetPath, branch) => core.cloneRepo(remoteUrl, targetPath, branch),
     } satisfies GitCoreShape;
   });
 

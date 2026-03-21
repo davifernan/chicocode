@@ -13,6 +13,9 @@ import { readNativeApi } from "./nativeApi";
 import { getWsTransport, replaceAppTransport } from "./wsNativeApi";
 import type { RemoteConnectionStatus, RemoteSyncStatus } from "@t3tools/contracts";
 import { runSync } from "./syncOrchestrator";
+import { runProjectSync } from "./projectSyncOrchestrator";
+import { loadRemoteHostConfig } from "./remoteHostConfig";
+import { useStore } from "./store";
 
 // ── History (module-level, stable across React re-renders) ────────────
 
@@ -84,6 +87,7 @@ function RemoteConnectionManager({ onTransportSwitch }: RemoteConnectionManagerP
           status: "syncing",
           total: 0,
           pushed: 0,
+          pulled: 0,
           skipped: 0,
           diverged: [],
           error: null,
@@ -94,20 +98,38 @@ function RemoteConnectionManager({ onTransportSwitch }: RemoteConnectionManagerP
             status: "syncing",
             total: progress.total,
             pushed: progress.pushed,
+            pulled: progress.pulled,
             skipped: progress.skipped,
             diverged: progress.diverged,
             error: null,
           });
         })
-          .then((summary) => {
+          .then(async (summary) => {
             dispatchSyncStatus({
               status: "done",
-              total: summary.pushed + summary.skipped + summary.diverged.length,
+              total: summary.pushed + summary.pulled + summary.skipped + summary.diverged.length,
               pushed: summary.pushed,
+              pulled: summary.pulled,
               skipped: summary.skipped,
               diverged: summary.diverged,
               error: summary.errors.length > 0 ? summary.errors.join("; ") : null,
             });
+
+            // Project sync: auto-clone git projects on remote (best-effort, never blocks connect)
+            try {
+              const remoteConfig = await loadRemoteHostConfig();
+              if (remoteConfig?.autoCloneGitProjects && remoteConfig.remoteWorkspaceBase.trim()) {
+                const projects = useStore.getState().projects.map((p) => ({
+                  id: p.id,
+                  workspaceRoot: p.cwd,
+                }));
+                await runProjectSync(localTransport, tunnelWsUrl, remoteConfig, projects, () => {
+                  // Progress handled silently for now — could add a separate banner later
+                });
+              }
+            } catch {
+              // Project sync errors are non-fatal — remote connect proceeds regardless
+            }
 
             // Sync done → switch appTransport to tunnel → remount router
             replaceAppTransport(tunnelWsUrl);
@@ -119,6 +141,7 @@ function RemoteConnectionManager({ onTransportSwitch }: RemoteConnectionManagerP
               status: "error",
               total: 0,
               pushed: 0,
+              pulled: 0,
               skipped: 0,
               diverged: [],
               error: err instanceof Error ? err.message : "Sync failed",

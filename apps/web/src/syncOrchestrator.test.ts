@@ -58,6 +58,7 @@ interface TypedMockTransport extends MockTransport {
 function makeLocalTransport(
   localManifest: ManifestEntry[],
   eventsByThread: Record<string, unknown[]> = {},
+  receiveResult: { accepted: number; skipped: number } = { accepted: 5, skipped: 0 },
 ): TypedMockTransport {
   const requestMock = vi.fn();
   const disposeMock = vi.fn();
@@ -67,6 +68,10 @@ function makeLocalTransport(
     }
     if (method === "sync.exportThreadEvents" && params?.threadId) {
       return Promise.resolve({ events: eventsByThread[params.threadId] ?? [] });
+    }
+    if (method === "sync.receiveEvents") {
+      // Used during pull pass: remote-only threads are received into local
+      return Promise.resolve(receiveResult);
     }
     return Promise.reject(new Error(`Unexpected local call: ${method}`));
   });
@@ -81,15 +86,20 @@ function makeLocalTransport(
 function makeRemoteTransport(
   remoteManifest: ManifestEntry[],
   receiveResult: { accepted: number; skipped: number } = { accepted: 5, skipped: 0 },
+  eventsByThread: Record<string, unknown[]> = {},
 ): TypedMockTransport {
   const requestMock = vi.fn();
   const disposeMock = vi.fn();
-  requestMock.mockImplementation((method: string) => {
+  requestMock.mockImplementation((method: string, params?: { threadId?: string }) => {
     if (method === "sync.getThreadManifest") {
       return Promise.resolve({ threads: remoteManifest });
     }
     if (method === "sync.receiveEvents") {
       return Promise.resolve(receiveResult);
+    }
+    if (method === "sync.exportThreadEvents" && params?.threadId) {
+      // Used during pull pass: export remote-only threads
+      return Promise.resolve({ events: eventsByThread[params.threadId] ?? [] });
     }
     return Promise.reject(new Error(`Unexpected remote call: ${method}`));
   });
@@ -422,6 +432,124 @@ describe("syncOrchestrator — abort signal", () => {
     const summary = await syncPromise;
 
     expect(summary.pushed).toBeLessThan(3);
+  });
+});
+
+describe("syncOrchestrator — bidirectional sync (pull pass)", () => {
+  it("pulls threads that exist remotely but not locally", async () => {
+    const { runSync } = await import("./syncOrchestrator");
+
+    // Local has no threads, remote has two
+    const local = makeLocalTransport([], {}, { accepted: 1, skipped: 0 });
+    const remote = makeRemoteTransport(
+      [
+        { threadId: "remote-t1", maxStreamVersion: 2, eventCount: 3 },
+        { threadId: "remote-t2", maxStreamVersion: 1, eventCount: 1 },
+      ],
+      { accepted: 1, skipped: 0 },
+      {
+        "remote-t1": [makeFakeEvent("remote-t1")],
+        "remote-t2": [makeFakeEvent("remote-t2")],
+      },
+    );
+    nextTransportQueue.push(remote);
+
+    const syncPromise = runSync(
+      local as unknown as import("./wsTransport").WsTransport,
+      "ws://tunnel:9999",
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    const summary = await syncPromise;
+
+    expect(summary.pulled).toBe(2);
+    expect(summary.pushed).toBe(0);
+    expect(summary.diverged).toHaveLength(0);
+    expect(summary.errors).toHaveLength(0);
+    // receiveEvents must have been called on the LOCAL transport (pull direction)
+    expect(local.requestMock).toHaveBeenCalledWith("sync.receiveEvents", expect.any(Object));
+  });
+
+  it("handles both push and pull in the same sync run", async () => {
+    const { runSync } = await import("./syncOrchestrator");
+
+    const local = makeLocalTransport(
+      [{ threadId: "local-only", maxStreamVersion: 1, eventCount: 1 }],
+      { "local-only": [makeFakeEvent("local-only")] },
+      { accepted: 1, skipped: 0 },
+    );
+    const remote = makeRemoteTransport(
+      [{ threadId: "remote-only", maxStreamVersion: 3, eventCount: 3 }],
+      { accepted: 1, skipped: 0 },
+      { "remote-only": [makeFakeEvent("remote-only")] },
+    );
+    nextTransportQueue.push(remote);
+
+    const syncPromise = runSync(
+      local as unknown as import("./wsTransport").WsTransport,
+      "ws://tunnel:9999",
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    const summary = await syncPromise;
+
+    expect(summary.pushed).toBe(1);
+    expect(summary.pulled).toBe(1);
+    expect(summary.diverged).toHaveLength(0);
+    expect(summary.errors).toHaveLength(0);
+  });
+
+  it("counts total as push + pull combined in progress callbacks", async () => {
+    const { runSync } = await import("./syncOrchestrator");
+
+    const local = makeLocalTransport(
+      [{ threadId: "local-only", maxStreamVersion: 1, eventCount: 1 }],
+      { "local-only": [makeFakeEvent("local-only")] },
+      { accepted: 1, skipped: 0 },
+    );
+    const remote = makeRemoteTransport(
+      [{ threadId: "remote-only", maxStreamVersion: 1, eventCount: 1 }],
+      { accepted: 1, skipped: 0 },
+      { "remote-only": [makeFakeEvent("remote-only")] },
+    );
+    nextTransportQueue.push(remote);
+
+    const progress: SyncProgress[] = [];
+    const syncPromise = runSync(
+      local as unknown as import("./wsTransport").WsTransport,
+      "ws://tunnel:9999",
+      (p) => progress.push({ ...p }),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await syncPromise;
+
+    // First progress call reports total = 1 push + 1 pull = 2
+    expect(progress[0]!.total).toBe(2);
+  });
+
+  it("does not pull threads that exist on both sides (same version)", async () => {
+    const { runSync } = await import("./syncOrchestrator");
+
+    const shared = { threadId: "shared", maxStreamVersion: 5, eventCount: 5 };
+    const local = makeLocalTransport([shared]);
+    const remote = makeRemoteTransport([shared]);
+    nextTransportQueue.push(remote);
+
+    const syncPromise = runSync(
+      local as unknown as import("./wsTransport").WsTransport,
+      "ws://tunnel:9999",
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    const summary = await syncPromise;
+
+    expect(summary.pulled).toBe(0);
+    expect(summary.pushed).toBe(0);
+    // exportThreadEvents must NOT be called on remote for shared threads
+    expect(remote.requestMock).not.toHaveBeenCalledWith(
+      "sync.exportThreadEvents",
+      expect.any(Object),
+    );
   });
 });
 

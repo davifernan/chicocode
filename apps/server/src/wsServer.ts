@@ -7,6 +7,8 @@
  * @module Server
  */
 import http from "node:http";
+import nodeFs from "node:fs/promises";
+import nodePath from "node:path";
 import os from "node:os";
 import type { Duplex } from "node:stream";
 
@@ -484,53 +486,109 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
           const isIdLookup =
             !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
-          const filePath = isIdLookup
-            ? resolveAttachmentPathById({
-                stateDir: serverConfig.stateDir,
-                attachmentId: normalizedRelativePath,
-              })
-            : resolveAttachmentRelativePath({
-                stateDir: serverConfig.stateDir,
-                relativePath: normalizedRelativePath,
-              });
-          if (!filePath) {
-            respond(
-              isIdLookup ? 404 : 400,
-              { "Content-Type": "text/plain" },
-              isIdLookup ? "Not Found" : "Invalid attachment path",
-            );
-            return;
-          }
 
-          const fileInfo = yield* fileSystem
-            .stat(filePath)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          if (!fileInfo || fileInfo.type !== "File") {
-            respond(404, { "Content-Type": "text/plain" }, "Not Found");
-            return;
-          }
-
-          const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-          res.writeHead(200, {
-            "Content-Type": contentType,
-            "Cache-Control": "public, max-age=31536000, immutable",
-          });
-          const streamExit = yield* Stream.runForEach(fileSystem.stream(filePath), (chunk) =>
-            Effect.sync(() => {
-              if (!res.destroyed) {
-                res.write(chunk);
-              }
-            }),
-          ).pipe(Effect.exit);
-          if (Exit.isFailure(streamExit)) {
-            if (!res.destroyed) {
-              res.destroy();
+          // Non-ID paths with invalid format → always 400, no tunnel fallback
+          if (!isIdLookup) {
+            const filePath = resolveAttachmentRelativePath({
+              stateDir: serverConfig.stateDir,
+              relativePath: normalizedRelativePath,
+            });
+            if (!filePath) {
+              respond(400, { "Content-Type": "text/plain" }, "Invalid attachment path");
+              return;
             }
+            const fileInfo = yield* fileSystem
+              .stat(filePath)
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (!fileInfo || fileInfo.type !== "File") {
+              respond(404, { "Content-Type": "text/plain" }, "Not Found");
+              return;
+            }
+            const contentType = Mime.getType(filePath) ?? "application/octet-stream";
+            res.writeHead(200, {
+              "Content-Type": contentType,
+              "Cache-Control": "public, max-age=31536000, immutable",
+            });
+            const streamExit = yield* Stream.runForEach(fileSystem.stream(filePath), (chunk) =>
+              Effect.sync(() => {
+                if (!res.destroyed) {
+                  res.write(chunk);
+                }
+              }),
+            ).pipe(Effect.exit);
+            if (Exit.isFailure(streamExit)) {
+              if (!res.destroyed) res.destroy();
+              return;
+            }
+            if (!res.writableEnded) res.end();
             return;
           }
-          if (!res.writableEnded) {
-            res.end();
+
+          // ID-based lookup: try local first, then fall back to remote tunnel proxy
+          const localFilePath = resolveAttachmentPathById({
+            stateDir: serverConfig.stateDir,
+            attachmentId: normalizedRelativePath,
+          });
+
+          if (localFilePath) {
+            const fileInfo = yield* fileSystem
+              .stat(localFilePath)
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (fileInfo && fileInfo.type === "File") {
+              const contentType = Mime.getType(localFilePath) ?? "application/octet-stream";
+              res.writeHead(200, {
+                "Content-Type": contentType,
+                "Cache-Control": "public, max-age=31536000, immutable",
+              });
+              const streamExit = yield* Stream.runForEach(
+                fileSystem.stream(localFilePath),
+                (chunk) =>
+                  Effect.sync(() => {
+                    if (!res.destroyed) {
+                      res.write(chunk);
+                    }
+                  }),
+              ).pipe(Effect.exit);
+              if (Exit.isFailure(streamExit)) {
+                if (!res.destroyed) res.destroy();
+                return;
+              }
+              if (!res.writableEnded) res.end();
+              return;
+            }
           }
+
+          // Not found locally — proxy to remote tunnel if connected.
+          // The tunnel forwards a local port to the remote server's localhost,
+          // so HTTP requests to http://127.0.0.1:<tunnelPort>/attachments/<id>
+          // are served from the remote server's disk without CORS issues.
+          const connStatus = yield* remoteHostService.getConnectionStatus();
+          if (connStatus.status === "connected" && connStatus.tunnelWsUrl) {
+            const tunnelHttpBase = connStatus.tunnelWsUrl.replace(/^wss?:/, "http:");
+            const proxyUrl = `${tunnelHttpBase}${ATTACHMENTS_ROUTE_PREFIX}/${encodeURIComponent(normalizedRelativePath)}`;
+            const proxyResult = yield* Effect.tryPromise({
+              try: () =>
+                fetch(proxyUrl, { signal: AbortSignal.timeout(10_000) }).then(async (r) => {
+                  if (!r.ok) return null;
+                  const buf = await r.arrayBuffer();
+                  return {
+                    contentType: r.headers.get("content-type") ?? "application/octet-stream",
+                    buffer: Buffer.from(buf),
+                  };
+                }),
+              catch: () => null,
+            });
+            if (proxyResult) {
+              res.writeHead(200, {
+                "Content-Type": proxyResult.contentType,
+                "Cache-Control": "public, max-age=31536000, immutable",
+              });
+              res.end(proxyResult.buffer);
+              return;
+            }
+          }
+
+          respond(404, { "Content-Type": "text/plain" }, "Not Found");
           return;
         }
 
@@ -1827,6 +1885,98 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           ),
         );
         return { relativePath: target.relativePath };
+      }
+
+      case WS_METHODS.projectResolveGitRepos: {
+        // Scan a workspace root for git repos (root itself or one level of subdirs).
+        // Used by the client during remote-connect sync to discover repos to clone.
+        const body = stripRequestTag(request.body);
+        const workspaceRoot = body.workspaceRoot;
+
+        // Helper: check one directory and return repo info or null
+        const checkRepo = (absPath: string, relPath: string) =>
+          Effect.gen(function* () {
+            const isRepo = yield* git.isGitRepository(absPath);
+            if (!isRepo) return null;
+            const remoteUrl = yield* git.getRemoteUrl(absPath);
+            if (!remoteUrl) return null; // skip repos without a remote
+            const branch = yield* git.getCurrentBranch(absPath);
+            return { relativePath: relPath, absolutePath: absPath, remoteUrl, branch };
+          });
+
+        const rootIsRepo = yield* git.isGitRepository(workspaceRoot);
+        const repos: Array<{
+          relativePath: string;
+          absolutePath: string;
+          remoteUrl: string;
+          branch: string;
+        }> = [];
+
+        if (rootIsRepo) {
+          const result = yield* checkRepo(workspaceRoot, ".");
+          if (result) repos.push(result);
+        } else {
+          // Scan one level of subdirectories
+          const entries = yield* Effect.tryPromise({
+            try: () => nodeFs.readdir(workspaceRoot, { withFileTypes: true }),
+            catch: (err) => (err instanceof Error ? err.message : String(err)),
+          }).pipe(Effect.catch(() => Effect.succeed([] as import("node:fs").Dirent[])));
+
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const subAbs = nodePath.join(workspaceRoot, entry.name);
+            const result = yield* checkRepo(subAbs, entry.name);
+            if (result) repos.push(result);
+          }
+        }
+
+        return { repos };
+      }
+
+      case WS_METHODS.projectGitClone: {
+        // Clone one or more git repos on this server.
+        // Used during remote-connect sync — runs on the REMOTE server via tunnel.
+        const body = stripRequestTag(request.body);
+        const results: Array<{
+          targetPath: string;
+          success: boolean;
+          skipped: boolean;
+          error?: string;
+        }> = [];
+
+        for (const target of body.repos) {
+          // Check if target already exists as a valid git repo → skip
+          const alreadyExists = yield* git.isGitRepository(target.targetPath);
+          if (alreadyExists) {
+            results.push({ targetPath: target.targetPath, success: true, skipped: true });
+            continue;
+          }
+
+          // Ensure parent directory exists (ignore if already exists)
+          yield* Effect.tryPromise({
+            try: () => nodeFs.mkdir(nodePath.dirname(target.targetPath), { recursive: true }),
+            catch: (err) => (err instanceof Error ? err.message : String(err)),
+          }).pipe(Effect.catch(() => Effect.void));
+
+          const cloneResult = yield* Effect.exit(
+            git.cloneRepo(target.remoteUrl, target.targetPath, target.branch),
+          );
+
+          if (cloneResult._tag === "Success") {
+            results.push({ targetPath: target.targetPath, success: true, skipped: false });
+          } else {
+            // Extract error message from the Exit failure
+            const errMsg = Exit.isFailure(cloneResult) ? String(cloneResult.cause) : "Clone failed";
+            results.push({
+              targetPath: target.targetPath,
+              success: false,
+              skipped: false,
+              error: errMsg,
+            });
+          }
+        }
+
+        return { results };
       }
 
       case WS_METHODS.shellOpenInEditor: {
