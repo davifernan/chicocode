@@ -11,6 +11,8 @@ const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 
+
+
 export const SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS = [1, 2, 3] as const;
 export type SidebarOpenProjectLimit = (typeof SIDEBAR_OPEN_PROJECT_LIMIT_OPTIONS)[number];
 
@@ -26,62 +28,86 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
 
 export const AppSettingsSchema = Schema.Struct({
   defaultProvider: Schema.Literals(["codex", "opencode", "claudeAgent"]).pipe(
+    Schema.withDecodingDefault((): ProviderKind => "codex"),
     Schema.withConstructorDefault(() => Option.some<ProviderKind>("codex")),
   ),
   defaultCodexModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
+    Schema.withDecodingDefault(() => getDefaultModel("codex")),
     Schema.withConstructorDefault(() => Option.some(getDefaultModel("codex"))),
   ),
   defaultOpenCodeModel: Schema.String.check(Schema.isMaxLength(MAX_CUSTOM_MODEL_LENGTH)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   opencodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   opencodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   claudePermissionMode: Schema.NullOr(Schema.String.check(Schema.isMaxLength(256))).pipe(
-    Schema.withConstructorDefault(() => Option.some(null)),
+    Schema.withDecodingDefault((): string | null => null),
+    Schema.withConstructorDefault(() => Option.some<string | null>(null)),
   ),
   defaultThreadEnvMode: Schema.Literals(["local", "worktree"]).pipe(
+    Schema.withDecodingDefault((): "local" | "worktree" => "local"),
     Schema.withConstructorDefault(() => Option.some<"local" | "worktree">("local")),
   ),
-  confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
+  confirmThreadDelete: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(() => true),
+    Schema.withConstructorDefault(() => Option.some(true)),
+  ),
   enableAssistantStreaming: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(() => false),
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
   enableOpencodeChatColors: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(() => false),
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
   sidebarOpenProjectLimit: Schema.Literals([1, 2, 3]).pipe(
+    Schema.withDecodingDefault((): SidebarOpenProjectLimit => 1),
     Schema.withConstructorDefault(() => Option.some<SidebarOpenProjectLimit>(1)),
   ),
   timestampFormat: Schema.Literals(["locale", "12-hour", "24-hour"]).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_TIMESTAMP_FORMAT),
     Schema.withConstructorDefault(() => Option.some(DEFAULT_TIMESTAMP_FORMAT)),
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
-    Schema.withConstructorDefault(() => Option.some([])),
+    Schema.withDecodingDefault((): readonly string[] => []),
+    Schema.withConstructorDefault(() => Option.some<readonly string[]>([])),
   ),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(
-    Schema.withConstructorDefault(() => Option.some([])),
+    Schema.withDecodingDefault((): readonly string[] => []),
+    Schema.withConstructorDefault(() => Option.some<readonly string[]>([])),
   ),
   customClaudeModels: Schema.Array(Schema.String).pipe(
-    Schema.withConstructorDefault(() => Option.some([])),
+    Schema.withDecodingDefault((): readonly string[] => []),
+    Schema.withConstructorDefault(() => Option.some<readonly string[]>([])),
   ),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   navigateToForkedThread: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(() => false),
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
-  forkPreFillContent: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
+  forkPreFillContent: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(() => true),
+    Schema.withConstructorDefault(() => Option.some(true)),
+  ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

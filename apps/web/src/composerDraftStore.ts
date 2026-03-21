@@ -292,7 +292,8 @@ function computeModelOptions(draft: {
     draft.claudeEffort != null || draft.claudeThinking || draft.claudeFastMode
       ? {
           ...(draft.claudeEffort != null ? { effort: draft.claudeEffort } : {}),
-          ...(draft.claudeThinking ? { thinking: true as const } : {}),
+          // claudeThinking:true means "thinking explicitly disabled" → emit thinking:false
+          ...(draft.claudeThinking ? { thinking: false as const } : {}),
           ...(draft.claudeFastMode ? { fastMode: true as const } : {}),
         }
       : undefined;
@@ -395,7 +396,10 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
     draft.effort === null &&
-    draft.codexFastMode === false
+    draft.codexFastMode === false &&
+    draft.claudeEffort === null &&
+    draft.claudeThinking === false &&
+    draft.claudeFastMode === false
   );
 }
 
@@ -797,7 +801,9 @@ function toHydratedThreadDraft(
     effort: persistedDraft.effort ?? null,
     codexFastMode: persistedDraft.codexFastMode === true,
     claudeEffort: persistedDraft.claudeEffort ?? null,
-    claudeThinking: persistedDraft.claudeThinking === true,
+    // Semantics changed: claudeThinking:true now means "thinking explicitly disabled".
+    // Old false (thinking was off) → new true (disabled). Old true/null (on/not set) → new false (use default).
+    claudeThinking: persistedDraft.claudeThinking === false,
     claudeFastMode: persistedDraft.claudeFastMode === true,
     get modelOptions() {
       return computeModelOptions(this);
@@ -1348,14 +1354,22 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const claude = options.claudeAgent;
           const nextDraft: ComposerThreadDraftState = {
             ...base,
-            effort:
-              codex?.reasoningEffort != null
+            // Normalize default effort to null — mirrors the existing setEffort logic.
+            // "high" is DEFAULT_REASONING_EFFORT_BY_PROVIDER.codex, storing it is a no-op.
+            effort: (() => {
+              if (codex?.reasoningEffort == null) return base.effort;
+              return codex.reasoningEffort !== DEFAULT_REASONING_EFFORT_BY_PROVIDER.codex
                 ? (codex.reasoningEffort as CodexReasoningEffort)
-                : base.effort,
+                : null;
+            })(),
             codexFastMode: codex?.fastMode != null ? codex.fastMode : base.codexFastMode,
             claudeEffort:
               claude?.effort != null ? (claude.effort as ClaudeCodeEffort) : base.claudeEffort,
-            claudeThinking: claude?.thinking != null ? claude.thinking : base.claudeThinking,
+            // Inverted semantics: claudeThinking:true = "thinking explicitly disabled".
+            // thinking:false in options → store true (disabled).
+            // thinking:true in options → store false (use default, same as not-set).
+            claudeThinking:
+              claude?.thinking != null ? !claude.thinking : base.claudeThinking,
             claudeFastMode: claude?.fastMode != null ? claude.fastMode : base.claudeFastMode,
             get modelOptions() {
               return computeModelOptions(this);

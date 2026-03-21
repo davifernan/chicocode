@@ -10,8 +10,7 @@ import {
   type OrchestrationThreadMessagesResult,
 } from "@t3tools/contracts";
 import {
-  getModelOptions,
-  normalizeModelSlug,
+  inferProviderForModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
@@ -342,27 +341,21 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
   return "codex";
 }
 
-const CODEX_MODEL_SLUGS = new Set<string>(getModelOptions("codex").map((option) => option.slug));
-const OPENCODE_MODEL_SLUGS = new Set<string>(
-  getModelOptions("opencode").map((option) => option.slug),
-);
-
 function inferProviderForThreadModel(input: {
   readonly model: string;
   readonly sessionProviderName: string | null;
 }): ProviderKind {
-  if (input.sessionProviderName === "codex" || input.sessionProviderName === "opencode") {
+  // Known provider names take priority — includes claudeAgent.
+  if (
+    input.sessionProviderName === "codex" ||
+    input.sessionProviderName === "opencode" ||
+    input.sessionProviderName === "claudeAgent"
+  ) {
     return input.sessionProviderName;
   }
-  const normalizedCodex = normalizeModelSlug(input.model, "codex");
-  if (normalizedCodex && CODEX_MODEL_SLUGS.has(normalizedCodex)) {
-    return "codex";
-  }
-  const normalizedOpenCode = normalizeModelSlug(input.model, "opencode");
-  if (normalizedOpenCode && OPENCODE_MODEL_SLUGS.has(normalizedOpenCode)) {
-    return "opencode";
-  }
-  return "codex";
+  // Delegate model-slug inference to shared/model which handles all three providers
+  // including Claude aliases (e.g. "sonnet" → "claude-sonnet-4-6").
+  return inferProviderForModel(input.model, "codex");
 }
 
 export function resolveWsHttpOrigin(): string {
