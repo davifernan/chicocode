@@ -10,7 +10,8 @@
  * @module ChicoCenter
  */
 
-import { useChicoStore, selectAllRuns, selectSelectedRun } from "../../chico/chicoStore";
+import { useMemo } from "react";
+import { useChicoStore } from "../../chico/chicoStore";
 import { useChicoSubscriptions } from "../../chico/useChicoSubscriptions";
 import { ChicoServerInfo } from "./ChicoServerInfo";
 import { RunGrid } from "./RunGrid";
@@ -24,9 +25,25 @@ export function ChicoCenter() {
   const isBootstrapping = useChicoStore((s) => s.isBootstrapping);
   const bootstrapError = useChicoStore((s) => s.bootstrapError);
   const serverInfo = useChicoStore((s) => s.serverInfo);
-  const runs = useChicoStore(selectAllRuns);
-  const selectedRun = useChicoStore(selectSelectedRun);
+  const runsById = useChicoStore((s) => s.runs);
+  const selectedRunId = useChicoStore((s) => s.selectedRunId);
   const selectRun = useChicoStore((s) => s.selectRun);
+
+  // Avoid returning fresh arrays/objects directly from Zustand selectors.
+  // `useSyncExternalStore` treats unstable selector results as changed even when
+  // the underlying store snapshot is the same, which can cause infinite
+  // re-render loops in production builds.
+  const runs = useMemo(
+    () =>
+      Array.from(runsById.values()).toSorted(
+        (a, b) => new Date(b.connectedAt).getTime() - new Date(a.connectedAt).getTime(),
+      ),
+    [runsById],
+  );
+  const selectedRun = useMemo(
+    () => (selectedRunId ? runsById.get(selectedRunId) ?? null : null),
+    [runsById, selectedRunId],
+  );
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
