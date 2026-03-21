@@ -33,6 +33,10 @@ import {
   type RemoteConnectionStatus,
   type RemoteServerMetrics,
   type RemoteSyncStatus,
+  type ChicoRunRegisteredPayload,
+  type ChicoRunDisconnectedPayload,
+  type ChicoRunEventPayload,
+  type ChicoRunStateUpdatePayload,
 } from "@t3tools/contracts";
 
 import { showContextMenuFallback } from "./contextMenuFallback";
@@ -58,6 +62,12 @@ const remoteMetricsListeners = new Set<(payload: RemoteServerMetrics) => void>()
 // devServer listeners are on appTransport — they survive transport switches via the Set pattern.
 const devServerStatusChangedListeners = new Set<(info: DevServerInfo) => void>();
 const devServerLogLineListeners = new Set<(payload: DevServerLogLinePayload) => void>();
+
+// Chico listeners — survive transport switches via the Set pattern.
+const chicoRunRegisteredListeners = new Set<(payload: ChicoRunRegisteredPayload) => void>();
+const chicoRunDisconnectedListeners = new Set<(payload: ChicoRunDisconnectedPayload) => void>();
+const chicoRunEventListeners = new Set<(payload: ChicoRunEventPayload) => void>();
+const chicoRunStateUpdateListeners = new Set<(payload: ChicoRunStateUpdatePayload) => void>();
 
 // ── Push subscription setup ───────────────────────────────────────────
 
@@ -127,6 +137,51 @@ function setupAppTransportSubscriptions(t: WsTransport): Array<() => void> {
           listener(payload);
         } catch {
           // swallow
+        }
+      }
+    }),
+  );
+
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.chicoRunRegistered, (message) => {
+      for (const l of chicoRunRegisteredListeners) {
+        try {
+          l(message.data);
+        } catch {
+          /* swallow */
+        }
+      }
+    }),
+  );
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.chicoRunDisconnected, (message) => {
+      for (const l of chicoRunDisconnectedListeners) {
+        try {
+          l(message.data);
+        } catch {
+          /* swallow */
+        }
+      }
+    }),
+  );
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.chicoRunEvent, (message) => {
+      for (const l of chicoRunEventListeners) {
+        try {
+          l(message.data);
+        } catch {
+          /* swallow */
+        }
+      }
+    }),
+  );
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.chicoRunStateUpdate, (message) => {
+      for (const l of chicoRunStateUpdateListeners) {
+        try {
+          l(message.data);
+        } catch {
+          /* swallow */
         }
       }
     }),
@@ -397,6 +452,35 @@ export function createWsNativeApi(): NativeApi {
     },
     opencode: {
       forkSession: (input) => app().request(WS_METHODS.opencodeForksession, input),
+    },
+    chico: {
+      getServerInfo: () => app().request(WS_METHODS.chicoGetServerInfo),
+      getRuns: () => app().request(WS_METHODS.chicoGetRuns),
+      getRunState: (input) => app().request(WS_METHODS.chicoGetRunState, input),
+      onRunRegistered: (callback) => {
+        chicoRunRegisteredListeners.add(callback);
+        return () => {
+          chicoRunRegisteredListeners.delete(callback);
+        };
+      },
+      onRunDisconnected: (callback) => {
+        chicoRunDisconnectedListeners.add(callback);
+        return () => {
+          chicoRunDisconnectedListeners.delete(callback);
+        };
+      },
+      onRunEvent: (callback) => {
+        chicoRunEventListeners.add(callback);
+        return () => {
+          chicoRunEventListeners.delete(callback);
+        };
+      },
+      onRunStateUpdate: (callback) => {
+        chicoRunStateUpdateListeners.add(callback);
+        return () => {
+          chicoRunStateUpdateListeners.delete(callback);
+        };
+      },
     },
   };
 

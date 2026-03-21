@@ -69,6 +69,15 @@ import type {
   DevServerStartInput,
   DevServerStopInput,
 } from "./devServer";
+import type {
+  ChicoGetRunStateInput,
+  ChicoRunDisconnectedPayload,
+  ChicoRunEventPayload,
+  ChicoRunRegisteredPayload,
+  ChicoRunSnapshot,
+  ChicoRunStateUpdatePayload,
+  ChicoServerInfo,
+} from "./chico";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -239,5 +248,21 @@ export interface NativeApi {
       messageId?: string | undefined;
       directory?: string | undefined;
     }) => Promise<{ forkedSessionId: string; title: string }>;
+  };
+  chico: {
+    /** Returns gRPC server info (port, host, endpoint hint for Chico containers). */
+    getServerInfo: () => Promise<ChicoServerInfo>;
+    /** Returns snapshots of all known Chico runs (active and disconnected). */
+    getRuns: () => Promise<ChicoRunSnapshot[]>;
+    /** Returns the snapshot for a specific run. */
+    getRunState: (input: ChicoGetRunStateInput) => Promise<ChicoRunSnapshot>;
+    /** Subscribe to new run connections. Returns an unsubscribe function. */
+    onRunRegistered: (callback: (payload: ChicoRunRegisteredPayload) => void) => () => void;
+    /** Subscribe to run disconnections. Returns an unsubscribe function. */
+    onRunDisconnected: (callback: (payload: ChicoRunDisconnectedPayload) => void) => () => void;
+    /** Subscribe to live AgentEvents from a run. Returns an unsubscribe function. */
+    onRunEvent: (callback: (payload: ChicoRunEventPayload) => void) => () => void;
+    /** Subscribe to debounced state snapshots. Returns an unsubscribe function. */
+    onRunStateUpdate: (callback: (payload: ChicoRunStateUpdatePayload) => void) => () => void;
   };
 }

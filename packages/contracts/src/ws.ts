@@ -63,6 +63,15 @@ import {
   DevServerStatusChangedPayload,
   DevServerStopInput,
 } from "./devServer";
+import {
+  CHICO_WS_CHANNELS,
+  CHICO_WS_METHODS,
+  ChicoGetRunStateInput,
+  ChicoRunDisconnectedPayload,
+  ChicoRunEventPayload,
+  ChicoRunRegisteredPayload,
+  ChicoRunStateUpdatePayload,
+} from "./chico";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -132,6 +141,11 @@ export const WS_METHODS = {
   devServerGetStatus: DEV_SERVER_WS_METHODS.getStatus,
   devServerGetStatuses: DEV_SERVER_WS_METHODS.getStatuses,
   devServerGetLogs: DEV_SERVER_WS_METHODS.getLogs,
+
+  // Chico observability
+  chicoGetServerInfo: CHICO_WS_METHODS.getServerInfo,
+  chicoGetRuns: CHICO_WS_METHODS.getRuns,
+  chicoGetRunState: CHICO_WS_METHODS.getRunState,
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -145,6 +159,12 @@ export const WS_CHANNELS = {
   serverMetrics: "server.metrics",
   devServerStatusChanged: DEV_SERVER_WS_CHANNELS.statusChanged,
   devServerLogLine: DEV_SERVER_WS_CHANNELS.logLine,
+
+  // Chico observability push channels
+  chicoRunRegistered: CHICO_WS_CHANNELS.runRegistered,
+  chicoRunDisconnected: CHICO_WS_CHANNELS.runDisconnected,
+  chicoRunEvent: CHICO_WS_CHANNELS.runEvent,
+  chicoRunStateUpdate: CHICO_WS_CHANNELS.runStateUpdate,
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -249,6 +269,11 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.devServerGetStatus, DevServerGetStatusInput),
   tagRequestBody(WS_METHODS.devServerGetStatuses, Schema.Struct({})),
   tagRequestBody(WS_METHODS.devServerGetLogs, DevServerGetLogsInput),
+
+  // Chico observability
+  tagRequestBody(WS_METHODS.chicoGetServerInfo, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.chicoGetRuns, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.chicoGetRunState, ChicoGetRunStateInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
@@ -289,6 +314,10 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverMetrics]: RemoteServerMetrics;
   readonly [WS_CHANNELS.devServerStatusChanged]: DevServerStatusChangedPayload;
   readonly [WS_CHANNELS.devServerLogLine]: DevServerLogLinePayload;
+  readonly [WS_CHANNELS.chicoRunRegistered]: ChicoRunRegisteredPayload;
+  readonly [WS_CHANNELS.chicoRunDisconnected]: ChicoRunDisconnectedPayload;
+  readonly [WS_CHANNELS.chicoRunEvent]: ChicoRunEventPayload;
+  readonly [WS_CHANNELS.chicoRunStateUpdate]: ChicoRunStateUpdatePayload;
 }
 
 export type WsPushChannel = keyof WsPushPayloadByChannel;
@@ -333,6 +362,25 @@ export const WsPushDevServerLogLine = makeWsPushSchema(
   DevServerLogLinePayload,
 );
 
+// ── Chico push schemas ───────────────────────────────────────────────
+
+export const WsPushChicoRunRegistered = makeWsPushSchema(
+  WS_CHANNELS.chicoRunRegistered,
+  ChicoRunRegisteredPayload,
+);
+export const WsPushChicoRunDisconnected = makeWsPushSchema(
+  WS_CHANNELS.chicoRunDisconnected,
+  ChicoRunDisconnectedPayload,
+);
+export const WsPushChicoRunEvent = makeWsPushSchema(
+  WS_CHANNELS.chicoRunEvent,
+  ChicoRunEventPayload,
+);
+export const WsPushChicoRunStateUpdate = makeWsPushSchema(
+  WS_CHANNELS.chicoRunStateUpdate,
+  ChicoRunStateUpdatePayload,
+);
+
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverWelcome,
   WS_CHANNELS.serverConfigUpdated,
@@ -343,6 +391,10 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverMetrics,
   WS_CHANNELS.devServerStatusChanged,
   WS_CHANNELS.devServerLogLine,
+  WS_CHANNELS.chicoRunRegistered,
+  WS_CHANNELS.chicoRunDisconnected,
+  WS_CHANNELS.chicoRunEvent,
+  WS_CHANNELS.chicoRunStateUpdate,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
 
@@ -356,6 +408,10 @@ export const WsPush = Schema.Union([
   WsPushServerMetrics,
   WsPushDevServerStatusChanged,
   WsPushDevServerLogLine,
+  WsPushChicoRunRegistered,
+  WsPushChicoRunDisconnected,
+  WsPushChicoRunEvent,
+  WsPushChicoRunStateUpdate,
 ]);
 export type WsPush = typeof WsPush.Type;
 

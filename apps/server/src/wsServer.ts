@@ -113,6 +113,8 @@ import {
   mergeOpenCodeProjectsByWorktree,
 } from "./opencode/OpenCodeProjectDiscovery.ts";
 import { canonicalizeWorkspacePath } from "./opencode/workspaceIdentity.ts";
+import { chicoRunRegistry } from "./chico/ChicoRunRegistry.ts";
+import { chicoGrpcServer } from "./chico/ChicoGrpcServer.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -1799,6 +1801,49 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     }),
   );
 
+  // Wire ChicoRunRegistry events → push bus.
+  // The registry is a module-level singleton updated by ChicoGrpcServer.
+  // We bridge its events into the WS push bus so every connected browser
+  // client receives Chico run updates in real-time.
+  const unsubscribeChicoRegistry = chicoRunRegistry.addListener((event) => {
+    switch (event.kind) {
+      case "run.registered":
+        void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.chicoRunRegistered, event.snapshot));
+        break;
+      case "run.disconnected":
+        void Effect.runPromise(
+          pushBus.publishAll(WS_CHANNELS.chicoRunDisconnected, { runId: event.runId }),
+        );
+        break;
+      case "run.event":
+        void Effect.runPromise(
+          pushBus.publishAll(WS_CHANNELS.chicoRunEvent, {
+            runId: event.runId,
+            event: {
+              seq: parseInt(event.event.seq, 10),
+              timestamp: event.event.timestamp,
+              event_type: event.event.event_type,
+              source: event.event.source,
+              worker_id: event.event.worker_id,
+              phase: event.event.phase,
+              level: event.event.level,
+              payload: event.event.payload,
+              run_id: event.event.run_id,
+            },
+          }),
+        );
+        // Also push a debounced state snapshot
+        void Effect.runPromise(
+          pushBus.publishAll(WS_CHANNELS.chicoRunStateUpdate, {
+            runId: event.runId,
+            snapshot: event.snapshot,
+          }),
+        );
+        break;
+    }
+  });
+  yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeChicoRegistry()));
+
   yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
     Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
   );
@@ -2130,6 +2175,34 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.devServerGetLogs: {
         const body = stripRequestTag(request.body);
         return devServerManager.getLogs(body.projectId, body.limit);
+      }
+
+      // ── Chico observability ───────────────────────────────────────────
+
+      case WS_METHODS.chicoGetServerInfo: {
+        const grpcPort = chicoGrpcServer.port;
+        const host = serverConfig.host ?? "localhost";
+        const grpcHost = host === "0.0.0.0" ? "localhost" : host;
+        return {
+          grpcPort,
+          grpcHost,
+          endpoint: `http://${grpcHost}:${grpcPort}`,
+        };
+      }
+
+      case WS_METHODS.chicoGetRuns: {
+        return chicoRunRegistry.getAllSnapshots();
+      }
+
+      case WS_METHODS.chicoGetRunState: {
+        const body = stripRequestTag(request.body);
+        const snapshot = chicoRunRegistry.getSnapshot(body.runId);
+        if (!snapshot) {
+          return yield* new RouteRequestError({
+            message: `Chico run not found: ${body.runId}`,
+          });
+        }
+        return snapshot;
       }
 
       case WS_METHODS.serverUpsertKeybinding: {
