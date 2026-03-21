@@ -110,8 +110,10 @@ interface ParsedProxyUrl {
  * /__devproxy/abc123/foo/bar?q=1 → { projectId: "abc123", strippedPath: "/foo/bar?q=1" }
  * /__devproxy/abc123/            → { projectId: "abc123", strippedPath: "/" }
  * /__devproxy/abc123             → { projectId: "abc123", strippedPath: "/" }
+ *
+ * Exported for unit testing.
  */
-function parseDevProxyUrl(url: URL): ParsedProxyUrl | null {
+export function parseDevProxyUrl(url: URL): ParsedProxyUrl | null {
   const after = url.pathname.slice(DEV_PROXY_PATH_PREFIX.length);
   if (!after) return null;
 
@@ -178,8 +180,10 @@ function resolveUpstream(
  *   - A `window.WebSocket` monkey-patch that prefixes same-host WS URLs with
  *     the proxy path, so HMR connections go through the T3 server instead of
  *     directly to the (unreachable from the browser) dev server port.
+ *
+ * Exported for unit testing.
  */
-function buildHtmlInjection(projectId: string): Buffer {
+export function buildHtmlInjection(projectId: string): Buffer {
   const prefix = `${DEV_PROXY_PATH_PREFIX}${projectId}`;
   const html =
     `<base href="${prefix}/">` +
@@ -440,10 +444,26 @@ export function handleDevProxyWsUpgrade(
       headers: upstreamHeaders,
     });
 
+    // Buffer messages received from the browser while targetWs is still
+    // CONNECTING. Without buffering, messages sent immediately after the
+    // browser handshake completes would be silently dropped because the
+    // upstream connection has not finished the TCP/WS handshake yet.
+    const pendingToUpstream: Array<{ data: Buffer | ArrayBuffer | Buffer[]; isBinary: boolean }> =
+      [];
+
+    targetWs.on("open", () => {
+      for (const { data, isBinary } of pendingToUpstream) {
+        targetWs.send(data, { binary: isBinary });
+      }
+      pendingToUpstream.length = 0;
+    });
+
     // Step 3: Pipe messages bidirectionally.
     browserWs.on("message", (data, isBinary) => {
       if (targetWs.readyState === WebSocket.OPEN) {
         targetWs.send(data, { binary: isBinary });
+      } else if (targetWs.readyState === WebSocket.CONNECTING) {
+        pendingToUpstream.push({ data: data as Buffer | ArrayBuffer | Buffer[], isBinary });
       }
     });
 
@@ -454,9 +474,18 @@ export function handleDevProxyWsUpgrade(
     });
 
     // Forward close in both directions.
+    // RFC 6455: only codes 1000-1003, 1007-1011, and 3000-4999 are valid to
+    // send in a close frame. Reserved codes (1004, 1005, 1006, 1015) and codes
+    // outside the valid range must be mapped to 1000 (normal closure).
+    const toSafeCloseCode = (code: number): number => {
+      if ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011)) return code;
+      if (code >= 3000 && code <= 4999) return code;
+      return 1000;
+    };
+
     browserWs.on("close", (code, reason) => {
       if (targetWs.readyState === WebSocket.OPEN || targetWs.readyState === WebSocket.CONNECTING) {
-        targetWs.close(code, reason);
+        targetWs.close(toSafeCloseCode(code), reason);
       }
     });
 
@@ -465,7 +494,7 @@ export function handleDevProxyWsUpgrade(
         browserWs.readyState === WebSocket.OPEN ||
         browserWs.readyState === WebSocket.CONNECTING
       ) {
-        browserWs.close(code, reason);
+        browserWs.close(toSafeCloseCode(code), reason);
       }
     });
 
