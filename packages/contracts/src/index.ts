@@ -13,3 +13,4 @@ export * from "./editor";
 export * from "./project";
 export * from "./devServer";
 export * from "./remoteHost";
+export * from "./chico";

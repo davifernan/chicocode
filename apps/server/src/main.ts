@@ -26,6 +26,7 @@ import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { chicoGrpcServer } from "./chico/ChicoGrpcServer.ts";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -254,6 +255,25 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+
+    // Start the Chico gRPC Cloud Controller server (fire-and-forget).
+    // Chico containers connect here by setting CHICO_GRPC_ENDPOINT=http://<host>:<port>
+    yield* Effect.sync(() => {
+      void chicoGrpcServer
+        .start()
+        .then(() => {
+          console.log(
+            `[Chico] gRPC server ready on port ${chicoGrpcServer.port} — ` +
+              `set CHICO_GRPC_ENDPOINT=http://<host>:${chicoGrpcServer.port} on Chico containers`,
+          );
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            `[Chico] gRPC server failed to start — observability unavailable: ${String(err)}`,
+          );
+        });
+    });
+
     yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;

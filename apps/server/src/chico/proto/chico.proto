@@ -1,0 +1,87 @@
+syntax = "proto3";
+package chico.cloud;
+
+// ============================================================
+// Events: Container → Cloud Controller (streaming)
+// ============================================================
+
+service ChicoEventStream {
+    // Server-streaming: Cloud Controller sends commands/pings to Container.
+    // On (re)connect, Cloud Controller sends last_known_seq so the bridge
+    // can replay missed events from SQLite before switching to live stream.
+    rpc StreamEvents(EventStreamInit) returns (stream AgentEvent);
+
+    // Unary: Container reports a single event to Cloud Controller.
+    // Called for every OrchestratorEvent in real-time.
+    rpc ReportEvent(AgentEvent) returns (EventAck);
+}
+
+message EventAck {
+    bool ok = 1;
+}
+
+message EventStreamInit {
+    string container_id = 1;     // unique container identifier
+    string run_id = 2;           // current run ID
+    string project_name = 3;     // project name
+    uint64 last_known_seq = 4;   // for resume: last seq the controller has
+}
+
+message AgentEvent {
+    uint64 seq = 1;              // monotonic sequence number
+    string timestamp = 2;        // ISO 8601
+    string event_type = 3;       // "WorkerCompleted", "PhaseTransition", etc.
+    string source = 4;           // "worker-3", "manager", "watchbuddy"
+    optional uint32 worker_id = 5;
+    string phase = 6;            // current phase
+    string level = 7;            // debug, info, warn, error
+    string payload = 8;          // JSON-serialized event data
+    string run_id = 9;
+    string container_id = 10;
+    optional string model = 11;  // resolved model for worker-scoped events
+}
+
+// ============================================================
+// Actions: Cloud Controller → Container (request/response)
+// ============================================================
+
+service ChicoActions {
+    // Send an action to the container (message, command, etc.)
+    rpc ExecuteAction(Action) returns (ActionResult);
+
+    // Query container state (proxies to SQLite)
+    rpc QueryState(StateQuery) returns (StateResponse);
+
+    // Server-streaming: subscribe to real-time OrchestratorEvents.
+    // Used by `chico watch` and the Cloud Controller dashboard.
+    // The client sends last_known_seq for replay from SQLite.
+    rpc SubscribeEvents(SubscribeRequest) returns (stream AgentEvent);
+}
+
+message SubscribeRequest {
+    uint64 last_known_seq = 1;   // replay events with seq > this value (0 = all)
+}
+
+message Action {
+    string action_type = 1;      // send_message, wake_manager, nudge_worker, stop_worker, request_status
+    string target = 2;           // "worker-3", "manager", "@all"
+    string payload = 3;          // JSON
+    string request_id = 4;       // for correlation
+}
+
+message ActionResult {
+    bool success = 1;
+    string request_id = 2;
+    optional string error = 3;
+    optional string data = 4;    // JSON response data if applicable
+}
+
+message StateQuery {
+    string query_type = 1;       // "dashboard", "trace", "errors", "worker"
+    string params = 2;           // JSON query params (same as HTTP query params)
+}
+
+message StateResponse {
+    bool success = 1;
+    string data = 2;             // JSON response (same format as HTTP endpoints)
+}

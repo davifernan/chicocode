@@ -387,6 +387,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const router = useRouter();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
+  const isOnChico = useLocation({ select: (loc) => loc.pathname.startsWith("/chico") });
   const { settings: appSettings } = useAppSettings();
   const defaultProjectModel = useMemo(
     () =>
@@ -1549,6 +1550,35 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : null}
         <RemoteStatusStrip onOpenModal={() => setIsRemoteModalOpen(true)} />
+
+        {/* Agent | Chico mode toggle */}
+        <div className="mx-3 mt-2 mb-0.5 flex rounded-md border border-border bg-muted/30 p-0.5">
+          <button
+            type="button"
+            onClick={() => void navigate({ to: "/" })}
+            className={cn(
+              "flex-1 rounded-sm px-2.5 py-1 text-[11px] font-medium transition-all",
+              !isOnChico
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Agent
+          </button>
+          <button
+            type="button"
+            onClick={() => void navigate({ to: "/chico/" })}
+            className={cn(
+              "flex-1 rounded-sm px-2.5 py-1 text-[11px] font-medium transition-all",
+              isOnChico
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Chico
+          </button>
+        </div>
+
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between px-2">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
