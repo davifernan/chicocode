@@ -43,6 +43,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { resolveAppModelSelection } from "../appSettings";
+import { useChicoStore } from "../chico/chicoStore";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { cn, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
@@ -388,6 +389,9 @@ export default function Sidebar() {
   const router = useRouter();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const isOnChico = useLocation({ select: (loc) => loc.pathname.startsWith("/chico") });
+  const chicoRunsById = useChicoStore((state) => state.runs);
+  const selectedChicoRunId = useChicoStore((state) => state.selectedRunId);
+  const selectChicoRun = useChicoStore((state) => state.selectRun);
   const { settings: appSettings } = useAppSettings();
   const defaultProjectModel = useMemo(
     () =>
@@ -1492,6 +1496,18 @@ export default function Sidebar() {
     </div>
   );
 
+  const chicoRuns = useMemo(
+    () =>
+      Array.from(chicoRunsById.values()).toSorted(
+        (a, b) => new Date(b.connectedAt).getTime() - new Date(a.connectedAt).getTime(),
+      ),
+    [chicoRunsById],
+  );
+  const activeChicoRuns = useMemo(
+    () => chicoRuns.filter((run) => run.status === "active"),
+    [chicoRuns],
+  );
+
   return (
     <>
       {isElectron ? (
@@ -1578,6 +1594,63 @@ export default function Sidebar() {
             Chico
           </button>
         </div>
+
+        {isOnChico ? (
+          <SidebarGroup className="px-2 py-2">
+            <div className="mb-1 flex items-center justify-between px-2">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                Runs
+              </span>
+              {activeChicoRuns.length > 0 ? (
+                <span className="text-[10px] font-mono text-muted-foreground/50">
+                  {activeChicoRuns.length} active
+                </span>
+              ) : null}
+            </div>
+
+            {chicoRuns.length > 0 ? (
+              <div className="space-y-1 px-1">
+                {chicoRuns.map((run) => {
+                  const isSelected = selectedChicoRunId === run.runId;
+                  const isActive = run.status === "active";
+                  return (
+                    <button
+                      key={run.runId}
+                      type="button"
+                      onClick={() => {
+                        selectChicoRun(run.runId);
+                        void navigate({ to: "/chico" });
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                        isSelected
+                          ? "bg-accent text-foreground"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "size-1.5 rounded-full shrink-0",
+                          isActive ? "bg-primary" : "bg-muted-foreground/40",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                        {run.projectName || run.runId}
+                      </span>
+                      <span className="truncate text-[10px] font-mono text-muted-foreground/60">
+                        {run.phase.replaceAll("_", " ")}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="px-3 py-2 text-xs text-muted-foreground/60">
+                No Chico runs connected yet.
+              </div>
+            )}
+          </SidebarGroup>
+        ) : null}
 
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between px-2">

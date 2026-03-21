@@ -5,14 +5,14 @@
  *   - As the main outlet in the /chico route
  *   - Later: as a popover/panel, sidebar widget, or popout window
  *
- * Manages its own bootstrapping and subscriptions via useChicoSubscriptions.
+ * Data bootstrapping/subscriptions are owned by the shared chat layout so the
+ * sidebar and the main content can observe the same Chico run state.
  *
  * @module ChicoCenter
  */
 
 import { useMemo } from "react";
 import { useChicoStore } from "../../chico/chicoStore";
-import { useChicoSubscriptions } from "../../chico/useChicoSubscriptions";
 import { ChicoServerInfo } from "./ChicoServerInfo";
 import { RunGrid } from "./RunGrid";
 import { RunMiniBar } from "./RunMiniBar";
@@ -20,8 +20,6 @@ import { RunDetail } from "./RunDetail";
 import { Loader2Icon } from "lucide-react";
 
 export function ChicoCenter() {
-  useChicoSubscriptions();
-
   const isBootstrapping = useChicoStore((s) => s.isBootstrapping);
   const bootstrapError = useChicoStore((s) => s.bootstrapError);
   const serverInfo = useChicoStore((s) => s.serverInfo);

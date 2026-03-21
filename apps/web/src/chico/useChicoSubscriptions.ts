@@ -13,10 +13,14 @@ import { useEffect } from "react";
 import { useChicoStore } from "./chicoStore";
 import { ensureNativeApi } from "../nativeApi";
 
-export function useChicoSubscriptions(): void {
+export function useChicoSubscriptions(enabled = true): void {
   const store = useChicoStore();
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     let cancelled = false;
 
     // ── Bootstrap ──────────────────────────────────────────────────
@@ -71,5 +75,5 @@ export function useChicoSubscriptions(): void {
       unsubStateUpdate();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount once — store actions are stable
+  }, [enabled]); // store actions are stable; only rewire when feature mode changes
 }

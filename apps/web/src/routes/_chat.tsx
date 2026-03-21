@@ -1,9 +1,10 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { Outlet, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
 import { type CSSProperties, useEffect } from "react";
 
 import ThreadSidebar from "../components/Sidebar";
+import { useChicoSubscriptions } from "../chico/useChicoSubscriptions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -97,6 +98,9 @@ function ChatRouteGlobalShortcuts() {
 
 function ChatRouteLayout() {
   const navigate = useNavigate();
+  const isOnChico = useLocation({ select: (loc) => loc.pathname.startsWith("/chico") });
+
+  useChicoSubscriptions(isOnChico);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
