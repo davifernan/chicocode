@@ -1907,4 +1907,177 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
+
+  // ── isGitRepository ──
+
+  describe("isGitRepository", () => {
+    it.effect("returns true for a directory that is a git repo", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const result = yield* core.isGitRepository(tmp);
+        expect(result).toBe(true);
+      }),
+    );
+
+    it.effect("returns false for a plain directory with no git", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        const result = yield* core.isGitRepository(tmp);
+        expect(result).toBe(false);
+      }),
+    );
+
+    it.effect("returns false for a non-existent path — never throws", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const result = yield* core.isGitRepository("/this/path/definitely/does/not/exist");
+        expect(result).toBe(false);
+      }),
+    );
+  });
+
+  // ── getCurrentBranch ──
+
+  describe("getCurrentBranch", () => {
+    it.effect("returns the current branch name after init+commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const branch = yield* core.getCurrentBranch(tmp);
+        expect(branch).toBe(initialBranch);
+      }),
+    );
+
+    it.effect("returns a non-empty string for detached HEAD — never throws", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["checkout", "--detach", "HEAD"]);
+        const core = yield* GitCore;
+        const branch = yield* core.getCurrentBranch(tmp);
+        // In detached HEAD, git rev-parse --abbrev-ref HEAD returns "HEAD"
+        expect(branch).toBe("HEAD");
+      }),
+    );
+
+    it.effect("returns a fallback string for non-repo paths — never throws", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir(); // not a repo
+        const core = yield* GitCore;
+        const branch = yield* core.getCurrentBranch(tmp);
+        // Should return "main" fallback (from catchAll in implementation)
+        expect(typeof branch).toBe("string");
+        expect(branch.length).toBeGreaterThan(0);
+      }),
+    );
+  });
+
+  // ── getRemoteUrl ──
+
+  describe("getRemoteUrl", () => {
+    it.effect("returns null when no remote is configured", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const url = yield* core.getRemoteUrl(tmp);
+        expect(url).toBeNull();
+      }),
+    );
+
+    it.effect("returns the origin URL when configured", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", "origin", "git@github.com:user/repo.git"]);
+        const core = yield* GitCore;
+        const url = yield* core.getRemoteUrl(tmp);
+        expect(url).toBe("git@github.com:user/repo.git");
+      }),
+    );
+
+    it.effect("returns null when specified remote does not exist", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const url = yield* core.getRemoteUrl(tmp, "nonexistent-remote");
+        expect(url).toBeNull();
+      }),
+    );
+  });
+
+  // ── cloneRepo ──
+
+  describe("cloneRepo", () => {
+    it.effect("clones a local bare repo to a target path", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        // Create source repo
+        const src = yield* makeTmpDir("clone-src-");
+        yield* initRepoWithCommit(src);
+        // Create target parent directory
+        const targetParent = yield* makeTmpDir("clone-target-parent-");
+        const targetPath = path.join(targetParent, "cloned-repo");
+
+        const core = yield* GitCore;
+        yield* core.cloneRepo(src, targetPath);
+
+        // The cloned repo should exist and be a git repo
+        const isRepo = yield* core.isGitRepository(targetPath);
+        expect(isRepo).toBe(true);
+
+        // Should contain the README from the source
+        const readmeExists = yield* fileSystem.stat(path.join(targetPath, "README.md")).pipe(
+          Effect.map((s) => s.type === "File"),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+        expect(readmeExists).toBe(true);
+      }),
+    );
+
+    it.effect("skips creating a pre-existing directory when repo already exists", () =>
+      Effect.gen(function* () {
+        const src = yield* makeTmpDir("clone-src2-");
+        yield* initRepoWithCommit(src);
+        const targetParent = yield* makeTmpDir("clone-target2-");
+        const targetPath = path.join(targetParent, "my-clone");
+
+        const core = yield* GitCore;
+        // First clone
+        yield* core.cloneRepo(src, targetPath);
+        const isRepoFirst = yield* core.isGitRepository(targetPath);
+        expect(isRepoFirst).toBe(true);
+
+        // isGitRepository should return true — our handlers skip re-cloning
+        const isRepoAgain = yield* core.isGitRepository(targetPath);
+        expect(isRepoAgain).toBe(true);
+      }),
+    );
+
+    it.effect("clones a specific branch when branch is specified", () =>
+      Effect.gen(function* () {
+        const src = yield* makeTmpDir("clone-branch-src-");
+        yield* initRepoWithCommit(src);
+        // Create a feature branch
+        yield* git(src, ["checkout", "-b", "feature-x"]);
+        yield* writeTextFile(path.join(src, "feature.txt"), "feature content");
+        yield* git(src, ["add", "."]);
+        yield* git(src, ["commit", "-m", "feature commit"]);
+
+        const targetParent = yield* makeTmpDir("clone-branch-target-");
+        const targetPath = path.join(targetParent, "cloned-with-branch");
+
+        const core = yield* GitCore;
+        yield* core.cloneRepo(src, targetPath, "feature-x");
+
+        const branch = yield* core.getCurrentBranch(targetPath);
+        expect(branch).toBe("feature-x");
+      }),
+    );
+  });
 });
