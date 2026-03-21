@@ -99,6 +99,12 @@ import { buildOpenCodeThreadProviderMetadata } from "./opencode/providerMetadata
 import { openCodeServerControl } from "./opencode/OpenCodeProcessManager.ts";
 import { OpenCodeSessionDiscovery } from "./opencode/OpenCodeSessionDiscovery.ts";
 import { devServerManager } from "./devServer/DevServerManager.ts";
+import {
+  DEV_PROXY_PATH_PREFIX,
+  handleDevProxyRequest,
+  handleDevProxyWsUpgrade,
+  closeProxyWsConnectionsForProject,
+} from "./devServer/devServerProxy.ts";
 import { OpenCodeSessionSync } from "./opencode/OpenCodeSessionSync.ts";
 import {
   isTemporaryWorktree,
@@ -828,6 +834,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               }),
             );
           }
+          return;
+        }
+
+        // ── Dev server preview proxy ────────────────────────────────
+        // Proxies HTTP requests and (via the upgrade handler below) WebSocket
+        // connections to the running dev server for a project.
+        // HTML responses receive a <base> tag + WebSocket constructor patch
+        // so HMR works through the proxy without any bundler configuration.
+        if (url.pathname.startsWith(DEV_PROXY_PATH_PREFIX)) {
+          handleDevProxyRequest(url, req, res, devServerManager);
           return;
         }
 
@@ -1689,8 +1705,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   // Wire dev server manager events → push bus.
   // logLines: send the whole chunk in one Effect.runPromise so we create one
   // fiber per stdio data event instead of one fiber per line.
-  const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) =>
+  const onDevServerStatusChanged = (info: import("@t3tools/contracts").DevServerInfo) => {
+    // Close open HMR proxy WS connections when the dev server stops or errors,
+    // so the browser sees a clean disconnect instead of a hanging connection.
+    if (info.status === "stopped" || info.status === "error") {
+      closeProxyWsConnectionsForProject(info.projectId);
+    }
     void Effect.runPromise(pushBus.publishAll(WS_CHANNELS.devServerStatusChanged, info));
+  };
   const onDevServerLogLines = (
     batch: import("./devServer/DevServerManager.ts").DevServerLogLinesBatch,
   ) =>
@@ -2114,6 +2136,20 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   httpServer.on("upgrade", (request, socket, head) => {
     socket.on("error", () => {}); // Prevent unhandled `EPIPE`/`ECONNRESET` from crashing the process if the client disconnects mid-handshake
+
+    // Dev server preview proxy — intercept before T3 WS auth check.
+    // These WS connections carry HMR traffic (Vite, Webpack, etc.) and are
+    // authenticated via the session cookie set on the HTTP side (Phase 5).
+    // They must NOT go through the T3 WS protocol path.
+    try {
+      const upgradeUrl = new URL(request.url ?? "/", `http://localhost:${port}`);
+      if (upgradeUrl.pathname.startsWith(DEV_PROXY_PATH_PREFIX)) {
+        handleDevProxyWsUpgrade(upgradeUrl, request, socket, head, devServerManager);
+        return;
+      }
+    } catch {
+      // Malformed URL — fall through to the T3 auth reject below
+    }
 
     if (authToken) {
       let providedToken: string | null = null;

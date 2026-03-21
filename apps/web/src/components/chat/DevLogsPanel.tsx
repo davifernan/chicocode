@@ -19,6 +19,12 @@ interface DevLogsPanelProps {
   recoveryHint?: string | undefined;
   conflictingPid?: number | undefined;
   serverUrl?: string | undefined;
+  /**
+   * Project ID used to build the dev-proxy preview URL (`/__devproxy/<projectId>/`).
+   * When provided, the preview opens through the T3 reverse proxy instead of the
+   * raw dev server URL — required for remote mode where localhost is unreachable.
+   */
+  projectId?: string | undefined;
   /** Package manager detected by the server (bun, npm, yarn, pnpm) */
   packageManager?: string | undefined;
   /** Project name shown in the embedded-panel header */
@@ -53,6 +59,7 @@ export function DevLogsPanel({
   recoveryHint,
   conflictingPid,
   serverUrl,
+  projectId,
   packageManager,
   projectName,
   onPopout,
@@ -143,8 +150,15 @@ export function DevLogsPanel({
               className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground [-webkit-app-region:no-drag]"
               onClick={() => {
                 if (window.desktopBridge) {
+                  // Electron: use native preview window with the raw URL
                   void window.desktopBridge.openOrFocusDevServerPreview(serverUrl);
+                } else if (projectId) {
+                  // Web: route through the T3 reverse proxy so preview works
+                  // in remote mode (where localhost:<port> is unreachable).
+                  const previewUrl = `/dev-server-preview?projectId=${encodeURIComponent(projectId)}`;
+                  window.open(previewUrl, "_blank", "noopener,noreferrer");
                 } else {
+                  // Fallback: open raw URL (local mode, no projectId available)
                   const previewUrl = `/dev-server-preview?target=${encodeURIComponent(serverUrl)}`;
                   window.open(previewUrl, "_blank", "noopener,noreferrer");
                 }

@@ -7,7 +7,16 @@ import { cn } from "~/lib/utils";
 
 export const Route = createFileRoute("/dev-server-preview")({
   validateSearch: (search: Record<string, unknown>) => ({
+    /**
+     * Legacy: raw dev server URL (local mode / Electron).
+     * Takes precedence if both are provided for backwards compat.
+     */
     target: typeof search.target === "string" ? search.target : "",
+    /**
+     * Preferred: project ID for routing through the T3 reverse proxy.
+     * Results in `src="/__devproxy/<projectId>/"` — works in remote mode.
+     */
+    projectId: typeof search.projectId === "string" ? search.projectId : "",
   }),
   component: DevServerPreviewPage,
 });
@@ -22,19 +31,25 @@ function extractDisplayHost(url: string): string {
 }
 
 function DevServerPreviewPage() {
-  const { target } = Route.useSearch();
+  const { target, projectId } = Route.useSearch();
+
+  // Resolve the iframe src:
+  //  - projectId present → proxy through T3 server (works in remote mode)
+  //  - target present → raw URL (legacy / Electron local)
+  //  - neither → empty (shows "No preview" state)
+  const iframeSrc = projectId ? `/__devproxy/${projectId}/` : target;
 
   // Key increments on reload so React recreates the iframe element
   const [reloadKey, setReloadKey] = useState(0);
   const [isReloading, setIsReloading] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const displayHost = target ? extractDisplayHost(target) : "";
+  const displayHost = iframeSrc ? extractDisplayHost(iframeSrc) : "";
 
   // Set document.title so Electron / macOS picks it up as window title
   useEffect(() => {
-    document.title = target ? `Dev Preview — ${displayHost}` : "Dev Preview";
-  }, [target, displayHost]);
+    document.title = iframeSrc ? `Dev Preview — ${displayHost}` : "Dev Preview";
+  }, [iframeSrc, displayHost]);
 
   const handleReload = () => {
     setIsReloading(true);
@@ -43,16 +58,16 @@ function DevServerPreviewPage() {
     setTimeout(() => setIsReloading(false), 600);
   };
 
-  // Also reload when target changes from outside (project switch)
-  const prevTargetRef = useRef(target);
+  // Also reload when src changes from outside (project switch)
+  const prevSrcRef = useRef(iframeSrc);
   useEffect(() => {
-    if (target !== prevTargetRef.current) {
-      prevTargetRef.current = target;
+    if (iframeSrc !== prevSrcRef.current) {
+      prevSrcRef.current = iframeSrc;
       setReloadKey((k) => k + 1);
     }
-  }, [target]);
+  }, [iframeSrc]);
 
-  if (!target) {
+  if (!iframeSrc) {
     return (
       <div className="flex h-dvh flex-col bg-background text-foreground">
         {/* drag region even on empty state so the window is movable */}
@@ -79,7 +94,7 @@ function DevServerPreviewPage() {
 
         {/* URL bar — read-only, shows the target host */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
-          <span className="truncate">{target}</span>
+          <span className="truncate">{iframeSrc}</span>
         </div>
 
         {/* Reload button */}
@@ -99,8 +114,8 @@ function DevServerPreviewPage() {
       <div className="min-h-0 flex-1 overflow-hidden">
         <iframe
           ref={iframeRef}
-          key={`${target}-${reloadKey}`}
-          src={target}
+          key={`${iframeSrc}-${reloadKey}`}
+          src={iframeSrc}
           title={`Dev Preview — ${displayHost}`}
           sandbox="allow-downloads allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts"
           className="block size-full border-0 bg-white"

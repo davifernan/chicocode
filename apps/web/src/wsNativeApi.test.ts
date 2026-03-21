@@ -188,14 +188,36 @@ describe("wsNativeApi — two-transport routing", () => {
     expect(transportInstances[1]!.request).not.toHaveBeenCalled();
   });
 
-  it("routes devServer.* methods to the management transport", async () => {
+  it("routes devServer.* methods to the app transport (index 1)", async () => {
+    // devServer.* was moved from managementTransport to appTransport so that
+    // in remote mode the dev server starts on the remote machine, not locally.
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();
 
-    transportInstances[0]!.request.mockResolvedValue([]);
+    transportInstances[1]!.request.mockResolvedValue([]);
     await api.devServer.getStatuses();
-    expect(transportInstances[0]!.request).toHaveBeenCalledWith(WS_METHODS.devServerGetStatuses);
-    expect(transportInstances[1]!.request).not.toHaveBeenCalled();
+    expect(transportInstances[1]!.request).toHaveBeenCalledWith(WS_METHODS.devServerGetStatuses);
+    expect(transportInstances[0]!.request).not.toHaveBeenCalled();
+  });
+
+  it("routes all devServer RPC methods to app transport", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    const appT = transportInstances[1]!;
+    const mgmtT = transportInstances[0]!;
+    appT.request.mockResolvedValue({} as never);
+
+    await api.devServer.start({ projectId: "p" as never, cwd: "/tmp" });
+    await api.devServer.stop({ projectId: "p" as never });
+    await api.devServer.getStatus({ projectId: "p" as never });
+    await api.devServer.getLogs({ projectId: "p" as never });
+
+    expect(appT.request).toHaveBeenCalledWith(WS_METHODS.devServerStart, expect.any(Object));
+    expect(appT.request).toHaveBeenCalledWith(WS_METHODS.devServerStop, expect.any(Object));
+    expect(appT.request).toHaveBeenCalledWith(WS_METHODS.devServerGetStatus, expect.any(Object));
+    expect(appT.request).toHaveBeenCalledWith(WS_METHODS.devServerGetLogs, expect.any(Object));
+    expect(mgmtT.request).not.toHaveBeenCalled();
   });
 
   it("routes orchestration.* methods to the app transport (index 1)", async () => {
@@ -558,5 +580,168 @@ describe("wsNativeApi — original behaviors preserved", () => {
     await api.contextMenu.show([{ id: "delete", label: "Delete", destructive: true }]);
 
     expect(showContextMenuFallbackMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── devServer push routing ────────────────────────────────────────────────────
+
+describe("wsNativeApi — devServer push subscription routing", () => {
+  it("delivers devServerStatusChanged from app transport to onStatusChanged listeners", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onStatusChanged(listener);
+
+    const info = {
+      projectId: ProjectId.makeUnsafe("p1"),
+      status: "running" as const,
+      url: "http://localhost:3000",
+    };
+    emitApp(WS_CHANNELS.devServerStatusChanged, info);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(info);
+  });
+
+  it("does NOT deliver devServerStatusChanged from management transport", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onStatusChanged(listener);
+
+    // Emit on management (index 0) — should NOT reach listener
+    emitManagement(WS_CHANNELS.devServerStatusChanged, {
+      projectId: ProjectId.makeUnsafe("p1"),
+      status: "running",
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("delivers devServerLogLine from app transport to onLogLine listeners", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onLogLine(listener);
+
+    const payload = {
+      projectId: ProjectId.makeUnsafe("p1"),
+      line: "Server started",
+      stream: "stdout" as const,
+    };
+    emitApp(WS_CHANNELS.devServerLogLine, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+  });
+
+  it("unsubscribing removes the listener", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    const unsub = api.devServer.onStatusChanged(listener);
+    unsub();
+
+    emitApp(WS_CHANNELS.devServerStatusChanged, {
+      projectId: ProjectId.makeUnsafe("p1"),
+      status: "stopped",
+    });
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+// ── devServer subscriptions survive replaceAppTransport ───────────────────────
+
+describe("wsNativeApi — devServer subscriptions survive replaceAppTransport", () => {
+  it("onStatusChanged listener receives events from new app transport after replace", async () => {
+    const { createWsNativeApi, replaceAppTransport } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onStatusChanged(listener);
+
+    // Switch transport (index 2 = new app transport)
+    replaceAppTransport("ws://tunnel:9999");
+
+    // Emit on NEW app transport
+    const info = { projectId: ProjectId.makeUnsafe("p"), status: "running" as const };
+    emitTo(2, WS_CHANNELS.devServerStatusChanged, info);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(info);
+  });
+
+  it("onStatusChanged listener does NOT receive events from the OLD transport after replace", async () => {
+    const { createWsNativeApi, replaceAppTransport } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onStatusChanged(listener);
+    replaceAppTransport("ws://tunnel:9999");
+
+    // Emit on OLD app transport (index 1) — should NOT reach listener
+    emitApp(WS_CHANNELS.devServerStatusChanged, {
+      projectId: ProjectId.makeUnsafe("p"),
+      status: "stopped",
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("onLogLine listener receives log lines from new app transport after replace", async () => {
+    const { createWsNativeApi, replaceAppTransport } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onLogLine(listener);
+
+    replaceAppTransport("ws://tunnel:9999");
+
+    const payload = {
+      projectId: ProjectId.makeUnsafe("p"),
+      line: "vite ready",
+      stream: "stdout" as const,
+    };
+    emitTo(2, WS_CHANNELS.devServerLogLine, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+  });
+
+  it("onLogLine listener does NOT receive log lines from old transport after replace", async () => {
+    const { createWsNativeApi, replaceAppTransport } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const listener = vi.fn();
+
+    api.devServer.onLogLine(listener);
+    replaceAppTransport("ws://tunnel:9999");
+
+    // Emit on old transport — should not arrive
+    emitApp(WS_CHANNELS.devServerLogLine, {
+      projectId: ProjectId.makeUnsafe("p"),
+      line: "old log",
+      stream: "stdout",
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("devServer RPC calls go to new app transport after replace", async () => {
+    const { createWsNativeApi, replaceAppTransport } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    replaceAppTransport("ws://tunnel:9999");
+    // index 2 = new app transport
+    transportInstances[2]!.request.mockResolvedValue([]);
+
+    await api.devServer.getStatuses();
+
+    expect(transportInstances[2]!.request).toHaveBeenCalledWith(WS_METHODS.devServerGetStatuses);
+    expect(transportInstances[1]!.request).not.toHaveBeenCalled();
+    expect(transportInstances[0]!.request).not.toHaveBeenCalled();
   });
 });

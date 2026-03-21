@@ -4,12 +4,12 @@
  * Two-transport architecture:
  *
  *  managementTransport — always local server, never changes.
- *    handles: server.*, remoteHost.*, devServer.*
+ *    handles: server.*, remoteHost.*
  *    push channels: serverRemoteConnectionStatus, serverRemoteSyncStatus
  *
  *  appTransport — starts as local, switches to tunnel after remote connect.
- *    handles: orchestration.*, terminal.*, git.*, projects.*, shell.*, sync.*
- *    push channels: serverWelcome, serverConfigUpdated
+ *    handles: orchestration.*, terminal.*, git.*, projects.*, shell.*, sync.*, devServer.*
+ *    push channels: serverWelcome, serverConfigUpdated, devServerStatusChanged, devServerLogLine
  *
  * replaceAppTransport(tunnelWsUrl) swaps appTransport live. JS closures
  * capture variable bindings, so all api method closures automatically use the
@@ -23,6 +23,8 @@ import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
+  type DevServerInfo,
+  type DevServerLogLinePayload,
   type NativeApi,
   ServerConfigUpdatedPayload,
   WS_CHANNELS,
@@ -52,6 +54,10 @@ const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayloa
 const remoteConnectionStatusListeners = new Set<(payload: RemoteConnectionStatus) => void>();
 const remoteSyncStatusListeners = new Set<(payload: RemoteSyncStatus) => void>();
 const remoteMetricsListeners = new Set<(payload: RemoteServerMetrics) => void>();
+
+// devServer listeners are on appTransport — they survive transport switches via the Set pattern.
+const devServerStatusChangedListeners = new Set<(info: DevServerInfo) => void>();
+const devServerLogLineListeners = new Set<(payload: DevServerLogLinePayload) => void>();
 
 // ── Push subscription setup ───────────────────────────────────────────
 
@@ -91,6 +97,32 @@ function setupAppTransportSubscriptions(t: WsTransport): Array<() => void> {
     t.subscribe(WS_CHANNELS.serverMetrics, (message) => {
       const payload = message.data;
       for (const listener of remoteMetricsListeners) {
+        try {
+          listener(payload);
+        } catch {
+          // swallow
+        }
+      }
+    }),
+  );
+
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.devServerStatusChanged, (message) => {
+      const payload = message.data;
+      for (const listener of devServerStatusChangedListeners) {
+        try {
+          listener(payload);
+        } catch {
+          // swallow
+        }
+      }
+    }),
+  );
+
+  cleanups.push(
+    t.subscribe(WS_CHANNELS.devServerLogLine, (message) => {
+      const payload = message.data;
+      for (const listener of devServerLogLineListeners) {
         try {
           listener(payload);
         } catch {
@@ -321,17 +353,25 @@ export function createWsNativeApi(): NativeApi {
         app().subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => callback(message.data)),
     },
     devServer: {
-      start: (input) => mgmt().request(WS_METHODS.devServerStart, input),
-      restart: (input) => mgmt().request(WS_METHODS.devServerRestart, input),
-      stop: (input) => mgmt().request(WS_METHODS.devServerStop, input),
-      stopAll: () => mgmt().request(WS_METHODS.devServerStopAll),
-      getStatus: (input) => mgmt().request(WS_METHODS.devServerGetStatus, input),
-      getStatuses: () => mgmt().request(WS_METHODS.devServerGetStatuses),
-      getLogs: (input) => mgmt().request(WS_METHODS.devServerGetLogs, input),
-      onStatusChanged: (callback) =>
-        mgmt().subscribe(WS_CHANNELS.devServerStatusChanged, (message) => callback(message.data)),
-      onLogLine: (callback) =>
-        mgmt().subscribe(WS_CHANNELS.devServerLogLine, (message) => callback(message.data)),
+      start: (input) => app().request(WS_METHODS.devServerStart, input),
+      restart: (input) => app().request(WS_METHODS.devServerRestart, input),
+      stop: (input) => app().request(WS_METHODS.devServerStop, input),
+      stopAll: () => app().request(WS_METHODS.devServerStopAll),
+      getStatus: (input) => app().request(WS_METHODS.devServerGetStatus, input),
+      getStatuses: () => app().request(WS_METHODS.devServerGetStatuses),
+      getLogs: (input) => app().request(WS_METHODS.devServerGetLogs, input),
+      onStatusChanged: (callback) => {
+        devServerStatusChangedListeners.add(callback);
+        return () => {
+          devServerStatusChangedListeners.delete(callback);
+        };
+      },
+      onLogLine: (callback) => {
+        devServerLogLineListeners.add(callback);
+        return () => {
+          devServerLogLineListeners.delete(callback);
+        };
+      },
     },
     remoteHost: {
       setConfig: (config) => mgmt().request(WS_METHODS.serverSetRemoteHostConfig, { config }),
