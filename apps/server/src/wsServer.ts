@@ -1815,24 +1815,39 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           pushBus.publishAll(WS_CHANNELS.chicoRunDisconnected, { runId: event.runId }),
         );
         break;
-      case "run.event":
+      case "run.event": {
+        // Debug: log every incoming event so we can verify ReportEvent is firing.
+        console.log(
+          `[Chico] run.event run=${event.runId} seq=${event.event.seq} type=${event.event.event_type}`,
+        );
+
+        // worker_id comes from proto-loader as null (unset optional uint32) or a number.
+        // Schema.optional(Schema.Int) requires undefined-or-number, not null — coerce here.
+        const workerIdRaw = event.event.worker_id;
+        const workerId: number | undefined =
+          workerIdRaw != null && Number.isFinite(workerIdRaw) ? workerIdRaw : undefined;
+
+        // seq is a proto uint64 string — guard against NaN from malformed values.
+        const seqParsed = parseInt(event.event.seq, 10);
+        const seq = Number.isFinite(seqParsed) ? seqParsed : 0;
+
         void Effect.runPromise(
           pushBus.publishAll(WS_CHANNELS.chicoRunEvent, {
             runId: event.runId,
             event: {
-              seq: parseInt(event.event.seq, 10),
+              seq,
               timestamp: event.event.timestamp,
               event_type: event.event.event_type,
               source: event.event.source,
-              worker_id: event.event.worker_id,
-              phase: event.event.phase,
-              level: event.event.level,
-              payload: event.event.payload,
+              ...(workerId !== undefined ? { worker_id: workerId } : {}),
+              phase: event.event.phase ?? "",
+              level: event.event.level ?? "info",
+              payload: event.event.payload ?? "{}",
               run_id: event.event.run_id,
             },
           }),
         );
-        // Also push a debounced state snapshot
+        // State snapshot — push after every event so the client stays in sync.
         void Effect.runPromise(
           pushBus.publishAll(WS_CHANNELS.chicoRunStateUpdate, {
             runId: event.runId,
@@ -1840,6 +1855,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           }),
         );
         break;
+      }
     }
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeChicoRegistry()));

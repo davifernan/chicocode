@@ -68,7 +68,10 @@ export class ChicoRunRegistry {
   registerRun(init: EventStreamInit): ChicoRunSession {
     const existing = this.sessions.get(init.run_id);
     if (existing) {
+      // Reconnect — re-activate and re-emit so the client updates status back to
+      // "active" (it may have marked the run as "disconnected" on the previous drop).
       existing.status = "active";
+      this.emit({ kind: "run.registered", snapshot: existing.toSnapshot() });
       return existing;
     }
 
