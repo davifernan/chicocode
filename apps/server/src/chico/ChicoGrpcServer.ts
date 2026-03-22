@@ -11,8 +11,10 @@
  *
  * Protocol recap (chico.proto):
  *   - `StreamEvents(EventStreamInit) → stream AgentEvent`
- *       Chico opens a long-lived stream; T3code keeps it open as a
- *       keepalive channel (no events are currently sent back).
+ *       Chico opens a long-lived stream. T3code must write keepalive
+ *       ServerPing events every ~20s — Chico's tonic client has a 30s
+ *       per-RPC deadline that will kill the stream otherwise, causing
+ *       the ~30s reconnect loop seen in logs.
  *   - `ReportEvent(AgentEvent) → EventAck`
  *       Every OrchestratorEvent is sent as a separate unary call.
  *
@@ -35,10 +37,23 @@ const DEFAULT_GRPC_PORT = 50099;
 // ── Service implementation ────────────────────────────────────────────
 
 /**
+ * Interval in ms between keepalive pings on the StreamEvents stream.
+ *
+ * Chico's tonic gRPC client sets a 30-second per-RPC deadline
+ * (client.rs:65). If T3Code sends nothing on the stream for 30s the
+ * client kills the call and immediately reconnects, producing the
+ * "Run disconnected / Run connected" loop visible in the logs.
+ *
+ * Sending a synthetic ServerPing event every 20s (matching what
+ * grpc_test_server.rs does) resets the deadline and keeps the
+ * stream alive indefinitely.
+ */
+const KEEPALIVE_INTERVAL_MS = 20_000;
+
+/**
  * `StreamEvents` — Chico opens this to identify the run and keep the
- * connection alive.  We register the run and hold the stream open.
- * When the stream closes (client disconnects / process dies) we mark
- * the run as disconnected.
+ * connection alive.  We register the run, send keepalive pings every
+ * 20s, and mark the run disconnected when the stream closes.
  */
 function handleStreamEvents(call: ServerWritableStream<EventStreamInit, AgentEvent>): void {
   const init = call.request as EventStreamInit;
@@ -53,19 +68,41 @@ function handleStreamEvents(call: ServerWritableStream<EventStreamInit, AgentEve
     `[ChicoGrpcServer] Run connected: run_id=${init.run_id} container_id=${init.container_id}`,
   );
 
+  // Send a ServerPing every 20s to prevent Chico's 30s RPC deadline
+  // from killing the stream and causing a reconnect loop.
+  const keepalive = setInterval(() => {
+    try {
+      call.write({
+        seq: "0",
+        timestamp: new Date().toISOString(),
+        event_type: "ServerPing",
+        source: "t3code",
+        phase: "",
+        level: "debug",
+        payload: "{}",
+        run_id: init.run_id,
+        container_id: init.container_id ?? "",
+      });
+    } catch {
+      // Stream may have closed between the tick and the write — ignore.
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+
+  const cleanup = () => clearInterval(keepalive);
+
   call.on("cancelled", () => {
+    cleanup();
     chicoRunRegistry.disconnectRun(init.run_id);
     console.log(`[ChicoGrpcServer] Run disconnected (cancelled): ${init.run_id}`);
   });
 
   call.on("error", () => {
+    cleanup();
     chicoRunRegistry.disconnectRun(init.run_id);
     console.log(`[ChicoGrpcServer] Run disconnected (error): ${init.run_id}`);
   });
 
-  // Keep stream open — don't call call.end() here.
-  // Chico uses this connection as a keepalive; T3code may later send
-  // control messages back via this stream.
+  // Do NOT call call.end() — keep the stream open.
 }
 
 /**
@@ -77,6 +114,9 @@ function handleReportEvent(
   cb: sendUnaryData<EventAck>,
 ): void {
   const event = call.request as AgentEvent;
+  console.log(
+    `[ChicoGrpcServer] ReportEvent: run=${event.run_id} seq=${event.seq} type=${event.event_type}`,
+  );
   chicoRunRegistry.applyEvent(event);
   cb(null, { ok: true });
 }

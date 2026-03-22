@@ -6,6 +6,7 @@
 import { cn } from "../../lib/utils";
 import type { ChicoRunSnapshot } from "@t3tools/contracts";
 import { formatElapsed } from "./utils";
+import { useLiveElapsed } from "./useLiveElapsed";
 
 interface Props {
   run: ChicoRunSnapshot;
@@ -59,7 +60,7 @@ function PhaseChip({ phase }: { phase: string }) {
 }
 
 export function RunHeader({ run }: Props) {
-  const elapsedMs = run.connectedAt ? Date.now() - new Date(run.connectedAt).getTime() : 0;
+  const elapsedMs = useLiveElapsed(run.connectedAt);
 
   const managerWorker = run.workers.find((w) => w.id === 999);
   const workerWorkers = run.workers.filter((w) => w.id !== 999);

@@ -6,6 +6,7 @@ import { CircleIcon, CheckCircle2Icon, XCircleIcon, Loader2Icon } from "lucide-r
 import { cn } from "../../lib/utils";
 import type { ChicoRunSnapshot } from "@t3tools/contracts";
 import { formatElapsed } from "./utils";
+import { useLiveElapsed } from "./useLiveElapsed";
 
 interface Props {
   run: ChicoRunSnapshot;
@@ -52,7 +53,7 @@ export function RunCard({ run, onClick }: Props) {
   ).length;
   const totalWorkers = run.workers.filter((w) => w.id !== 999).length;
 
-  const connectedMs = run.connectedAt ? Date.now() - new Date(run.connectedAt).getTime() : 0;
+  const connectedMs = useLiveElapsed(run.connectedAt);
 
   return (
     <button

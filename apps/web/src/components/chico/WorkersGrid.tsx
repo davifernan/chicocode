@@ -5,10 +5,15 @@
 import { cn } from "../../lib/utils";
 import type { ChicoRunSnapshot, ChicoWorkerSnapshot } from "@t3tools/contracts";
 import { lifecycleIcon, lifecycleColor, formatElapsed } from "./utils";
+import { useLiveElapsed } from "./useLiveElapsed";
 
 function WorkerRow({ worker }: { worker: ChicoWorkerSnapshot }) {
   const isManager = worker.id === 999;
-  const elapsed = worker.startedAt != null ? formatElapsed(Date.now() - worker.startedAt) : "—";
+  // Convert startedAt (number | null) to an ISO string for useLiveElapsed,
+  // which expects a string timestamp. null means not started yet.
+  const startedAtIso = worker.startedAt != null ? new Date(worker.startedAt).toISOString() : null;
+  const elapsedMs = useLiveElapsed(startedAtIso);
+  const elapsed = worker.startedAt != null ? formatElapsed(elapsedMs) : "—";
 
   return (
     <div
