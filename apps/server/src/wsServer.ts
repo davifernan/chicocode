@@ -594,6 +594,27 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           return;
         }
 
+        // ── Health check endpoint ───────────────────────────────────
+        // Used by ConnectionChecker to verify that a remote T3 server is
+        // reachable through the SSH tunnel and that the auth token is valid.
+        if (url.pathname === "/api/health" && req.method === "GET") {
+          const providedToken = url.searchParams.get("token");
+          if (providedToken !== null && authToken && providedToken !== authToken) {
+            respond(
+              401,
+              { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+              JSON.stringify({ ok: false, error: "Unauthorized" }),
+            );
+            return;
+          }
+          respond(
+            200,
+            { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+            JSON.stringify({ ok: true }),
+          );
+          return;
+        }
+
         // ── OpenCode provider proxy ─────────────────────────────────
         // Proxies GET /api/opencode/providers to the running OpenCode
         // server's GET /provider endpoint. Returns the full provider

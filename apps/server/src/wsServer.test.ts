@@ -1992,6 +1992,53 @@ describe("WebSocket Server", () => {
     });
   });
 
+  // ── /api/health endpoint ──────────────────────────────────────────
+  it("responds 200 to GET /api/health without auth", async () => {
+    server = await createTestServer({ cwd: "/test" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("responds 200 to GET /api/health with correct token", async () => {
+    server = await createTestServer({ cwd: "/test", authToken: "health-test-token" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/health?token=health-test-token`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("responds 401 to GET /api/health with wrong token", async () => {
+    server = await createTestServer({ cwd: "/test", authToken: "correct-token" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/health?token=wrong-token`);
+    expect(response.status).toBe(401);
+    const body = (await response.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("Unauthorized");
+  });
+
+  it("responds 200 to GET /api/health without token param even when server has auth", async () => {
+    server = await createTestServer({ cwd: "/test", authToken: "server-secret" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    // No ?token= param → health check succeeds (auth is only enforced when token is provided)
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
   it("rejects websocket connections without a valid auth token", async () => {
     server = await createTestServer({ cwd: "/test", authToken: "secret-token" });
     const addr = server.address();

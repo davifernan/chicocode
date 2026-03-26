@@ -88,7 +88,7 @@ const stepPortTest = async (
     step: "port-test",
     ok: false,
     error: err,
-    hint: `The T3 server on the remote doesn't appear to be running on port ${config.remoteServerPort}. Start it with \`t3 serve\` on the remote machine.`,
+    hint: `The T3 server on the remote doesn't appear to be running on port ${config.remoteServerPort}. Start it with: T3CODE_AUTH_TOKEN=<token> bun run start -- --host 127.0.0.1 --port ${config.remoteServerPort} --no-browser`,
   };
 };
 
@@ -120,14 +120,14 @@ const stepAuth = async (
     return { step: "auth", ok: true, error: null, hint: null };
   }
   const healthUrl = `http://127.0.0.1:${tunnelLocalPort}/api/health`;
-  const result = await httpGet(healthUrl + "?auth=1");
-  // A 401 response means auth is required and the token was rejected
+  const tokenParam = `?token=${encodeURIComponent(config.remoteAuthToken)}`;
+  const result = await httpGet(healthUrl + tokenParam);
   if (!result.ok && result.status === 401) {
     return {
       step: "auth",
       ok: false,
       error: "Auth token rejected (401 Unauthorized)",
-      hint: "Double-check the auth token in your remote server config and the T3_AUTH_TOKEN setting on the remote.",
+      hint: "Double-check the auth token in your remote host config and the T3CODE_AUTH_TOKEN setting on the remote server.",
     };
   }
   return { step: "auth", ok: true, error: null, hint: null };

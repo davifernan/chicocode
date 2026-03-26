@@ -95,7 +95,11 @@ export const makeRemoteHostService = Effect.gen(function* () {
 
       const tunnelResult = yield* tunnelManager.start(config).pipe(Effect.mapError((err) => err));
 
-      const tunnelWsUrl = `ws://127.0.0.1:${tunnelResult.localPort}`;
+      const tokenSuffix =
+        config.remoteAuthToken != null && config.remoteAuthToken.length > 0
+          ? `?token=${encodeURIComponent(config.remoteAuthToken)}`
+          : "";
+      const tunnelWsUrl = `ws://127.0.0.1:${tunnelResult.localPort}${tokenSuffix}`;
 
       // Verify full path through tunnel
       yield* publish({

@@ -185,7 +185,7 @@ export function RemoteHostSettingsForm() {
                   remoteAuthToken: e.target.value.length > 0 ? e.target.value : null,
                 }))
               }
-              placeholder="T3_AUTH_TOKEN"
+              placeholder="T3CODE_AUTH_TOKEN"
             />
           </div>
           <div>

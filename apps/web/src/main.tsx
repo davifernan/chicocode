@@ -154,7 +154,9 @@ function RemoteConnectionManager({ onTransportSwitch }: RemoteConnectionManagerP
       }
 
       if (status.status === "disconnected" && isInRemoteMode.current) {
-        // Tunnel dropped — switch back to local transport and remount
+        // Tunnel dropped — switch back to local transport and remount.
+        // Reset syncInFlight so a subsequent reconnect can trigger sync again.
+        syncInFlight.current = false;
         replaceAppTransport(null);
         isInRemoteMode.current = false;
         onTransportSwitch();
