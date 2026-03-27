@@ -78,13 +78,17 @@ export function RemoteStatusStrip({ onOpenModal }: RemoteStatusStripProps) {
     return () => clearInterval(id);
   }, []);
 
-  // Reset metrics when disconnected so stale numbers don't linger
+  // Reset metrics on any status transition so stale values don't linger.
+  // Clearing on → "connected" prevents local server metrics from briefly
+  // showing while the remote server hasn't pushed its first metrics yet.
   const prevStatusRef = useRef<string | null>(null);
   useEffect(() => {
-    if (status?.status !== "connected" && prevStatusRef.current === "connected") {
+    const prev = prevStatusRef.current;
+    const curr = status?.status ?? null;
+    if (curr !== prev) {
       setMetrics(null);
     }
-    prevStatusRef.current = status?.status ?? null;
+    prevStatusRef.current = curr;
   }, [status]);
 
   if (!status || status.status === "disconnected") return null;

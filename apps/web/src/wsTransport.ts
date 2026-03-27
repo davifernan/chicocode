@@ -58,6 +58,8 @@ export class WsTransport {
   private disposed = false;
   private state: TransportState = "connecting";
   private readonly url: string;
+  /** Callbacks waiting for the WebSocket to reach "open" state. */
+  private readonly openListeners = new Set<() => void>();
 
   constructor(url?: string) {
     const bridgeUrl = window.desktopBridge?.getWsUrl();
@@ -151,8 +153,41 @@ export class WsTransport {
     }
     this.pending.clear();
     this.outboundQueue.length = 0;
+    // Reject any waitUntilOpen callers
+    for (const listener of this.openListeners) {
+      listener(); // resolve so callers can check disposed state
+    }
+    this.openListeners.clear();
     this.ws?.close();
     this.ws = null;
+  }
+
+  /**
+   * Returns a promise that resolves once the WebSocket reaches the "open"
+   * state. Rejects if the transport is disposed or if `timeoutMs` elapses
+   * before the connection is established.
+   */
+  waitUntilOpen(timeoutMs = 10_000): Promise<void> {
+    if (this.state === "open") return Promise.resolve();
+    if (this.disposed) return Promise.reject(new Error("Transport is disposed"));
+
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.openListeners.delete(onOpen);
+        reject(new Error(`Transport did not connect within ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      const onOpen = () => {
+        clearTimeout(timer);
+        if (this.disposed) {
+          reject(new Error("Transport was disposed while waiting for connection"));
+        } else {
+          resolve();
+        }
+      };
+
+      this.openListeners.add(onOpen);
+    });
   }
 
   private connect() {
@@ -168,6 +203,11 @@ export class WsTransport {
       this.state = "open";
       this.reconnectAttempt = 0;
       this.flushQueue();
+      // Resolve any waitUntilOpen callers
+      for (const listener of this.openListeners) {
+        listener();
+      }
+      this.openListeners.clear();
     });
 
     ws.addEventListener("message", (event) => {

@@ -86,8 +86,9 @@ export async function runSync(
 ): Promise<SyncSummary> {
   const remoteTransport = new WsTransport(tunnelWsUrl);
 
-  // Give remote transport a moment to connect
-  await new Promise((res) => setTimeout(res, 1_500));
+  // Wait for the remote WebSocket to be fully open before sending any requests.
+  // A fixed timeout was unreliable on slow networks or first-connect handshakes.
+  await remoteTransport.waitUntilOpen(15_000);
 
   const errors: string[] = [];
   const diverged: string[] = [];

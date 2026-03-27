@@ -17,7 +17,7 @@
  * @module projectSyncOrchestrator
  */
 import type { DiscoveredGitRepo, GitCloneResult, RemoteHostConfig } from "@t3tools/contracts";
-import { WS_METHODS } from "@t3tools/contracts";
+import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 
 import { WsTransport } from "./wsTransport";
 
@@ -105,8 +105,10 @@ export async function runProjectSync(
   }
 
   const remoteTransport = new WsTransport(tunnelWsUrl);
-  // Give the remote transport a moment to connect (shared tunnel — already up)
-  await new Promise((res) => setTimeout(res, 500));
+  // Wait for the remote WebSocket to be fully open. The tunnel is usually
+  // already established at this point, but the new WS handshake still needs
+  // to complete before we can send requests.
+  await remoteTransport.waitUntilOpen(15_000);
 
   const errors: string[] = [];
   let cloned = 0;
@@ -114,11 +116,17 @@ export async function runProjectSync(
   let failed = 0;
 
   try {
-    // Collect all repos across all projects first so we can report total
+    // Collect all repos across all projects first so we can report total.
+    // We also track which repos are the project root (relativePath === ".")
+    // so we can update workspaceRoot on the remote server after cloning.
     type RepoTarget = {
       remoteUrl: string;
       targetPath: string;
       branch?: string;
+      /** Identifies the owning project — used to update workspaceRoot after clone. */
+      projectId: string;
+      /** True when this repo is the project root (not a sub-directory repo). */
+      isRootRepo: boolean;
     };
     const allTargets: RepoTarget[] = [];
 
@@ -131,6 +139,8 @@ export async function runProjectSync(
             remoteUrl: repo.remoteUrl,
             targetPath: remoteTargetPath(config.remoteWorkspaceBase, project.workspaceRoot, repo),
             ...(repo.branch ? { branch: repo.branch } : {}),
+            projectId: project.id,
+            isRootRepo: repo.relativePath === ".",
           });
         }
       } catch {
@@ -160,7 +170,13 @@ export async function runProjectSync(
       });
 
       try {
-        const results = await cloneRepos(remoteTransport, batch);
+        // Strip client-only fields before sending to the server
+        const cloneTargets = batch.map(({ remoteUrl, targetPath, branch }) => ({
+          remoteUrl,
+          targetPath,
+          ...(branch ? { branch } : {}),
+        }));
+        const results = await cloneRepos(remoteTransport, cloneTargets);
         for (const result of results) {
           if (result.skipped) {
             skipped += 1;
@@ -170,6 +186,30 @@ export async function runProjectSync(
             failed += 1;
             if (result.error) {
               errors.push(`Clone failed for ${result.targetPath}: ${result.error}`);
+            }
+          }
+
+          // After a successful clone (or when the repo already exists), update
+          // the project's workspaceRoot on the remote server to the remote path.
+          // This is critical so the agent uses the correct CWD when running on
+          // the remote instead of the local machine's path.
+          if ((result.success || result.skipped) && !signal?.aborted) {
+            const target = batch.find((t) => t.targetPath === result.targetPath);
+            if (target?.isRootRepo) {
+              try {
+                await remoteTransport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+                  command: {
+                    type: "project.meta.update",
+                    commandId: crypto.randomUUID(),
+                    projectId: target.projectId,
+                    workspaceRoot: target.targetPath,
+                  },
+                });
+              } catch {
+                // Non-fatal: if the path doesn't exist yet on the remote or the
+                // server normalisation rejects it, we skip silently. The agent
+                // will still start — just potentially with the wrong cwd.
+              }
             }
           }
         }
