@@ -65,6 +65,40 @@ const reserveFreePort = (): Promise<number> =>
     server.on("error", reject);
   });
 
+/**
+ * Poll the local port with TCP connection attempts until it accepts connections
+ * or the deadline is reached. SSH sets up the local listener for `-L` forwarding
+ * only after the full SSH handshake is complete, so we need to probe rather than
+ * use a blind `setTimeout`.
+ */
+const waitForLocalPortReady = (port: number, maxWaitMs = 30_000): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const deadline = Date.now() + maxWaitMs;
+    const attempt = () => {
+      const socket = new net.Socket();
+      const onConnected = () => {
+        socket.destroy();
+        resolve();
+      };
+      const onFail = () => {
+        socket.destroy();
+        if (Date.now() >= deadline) {
+          reject(
+            new Error(`SSH tunnel local port ${port} did not become ready within ${maxWaitMs}ms`),
+          );
+          return;
+        }
+        setTimeout(attempt, 250);
+      };
+      socket.setTimeout(1_000);
+      socket.once("connect", onConnected);
+      socket.once("error", onFail);
+      socket.once("timeout", onFail);
+      socket.connect(port, "127.0.0.1");
+    };
+    attempt();
+  });
+
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_MAX_ATTEMPTS = 8;
@@ -117,28 +151,29 @@ export const makeSshTunnelManager = (): SshTunnelManagerShape => {
       const proc = spawn("ssh", args, { stdio: "ignore" });
       currentProcess = proc;
 
-      // Give SSH a moment to connect before resolving
-      const readyTimer = setTimeout(() => {
-        if (proc === currentProcess) {
+      // Guard against double-settling (process exit can race with port-ready check)
+      let settled = false;
+      const settle = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (err) {
+          status = { kind: "error", cause: err.message };
+          reject(err);
+        } else {
           status = { kind: "running", localPort };
           reconnectAttempt = 0;
           resolve();
         }
-      }, 2_000);
+      };
 
       proc.on("error", (err) => {
-        clearTimeout(readyTimer);
-        status = { kind: "error", cause: err.message };
-        reject(new Error(err.message));
+        settle(new Error(err.message));
       });
 
       proc.on("close", (code) => {
-        clearTimeout(readyTimer);
-        // Only reject the initial promise if we haven't resolved yet
-        // (i.e., code < 0 or we died before the ready timer fired)
-        if (status.kind === "starting") {
-          status = { kind: "error", cause: `SSH exited with code ${String(code)}` };
-          reject(new Error(`SSH exited with code ${String(code)}`));
+        if (!settled) {
+          // SSH exited before the tunnel was established
+          settle(new Error(`SSH exited with code ${String(code)}`));
         } else if (!stopRequested) {
           // Tunnel died after being established — schedule reconnect
           status = {
@@ -148,6 +183,19 @@ export const makeSshTunnelManager = (): SshTunnelManagerShape => {
           scheduleReconnect(config, localPort);
         }
       });
+
+      // Poll the local port until SSH sets up the -L listener. This replaces the
+      // previous blind 2-second setTimeout, which was too short on slow networks
+      // and caused "Transport did not connect" errors on the client side.
+      waitForLocalPortReady(localPort, 30_000)
+        .then(() => {
+          if (proc === currentProcess) {
+            settle();
+          }
+        })
+        .catch((err: unknown) => {
+          settle(err instanceof Error ? err : new Error(String(err)));
+        });
     });
 
   let reconnectConfig: RemoteHostConfig | null = null;
