@@ -84,11 +84,26 @@ export async function runSync(
   onProgress: (progress: SyncProgress) => void,
   signal?: AbortSignal,
 ): Promise<SyncSummary> {
+  // ── Diagnostic: verify the tunnel is reachable from the renderer ──────
+  // The server-side ConnectionChecker already passed (HTTP via Node.js fetch).
+  // This check verifies that the Electron renderer process can also reach the
+  // tunnel — if it fails, the issue is renderer-level (CSP, security, etc.).
+  const tunnelHttpUrl = tunnelWsUrl.replace(/^ws:/, "http:").replace(/\?.*$/, "");
+  try {
+    const res = await fetch(`${tunnelHttpUrl}/api/health`);
+    console.info("[sync] Renderer HTTP tunnel check:", res.status, res.ok ? "OK" : "FAIL");
+  } catch (err) {
+    console.error(
+      "[sync] Renderer HTTP tunnel check FAILED — renderer cannot reach the tunnel port:",
+      err,
+    );
+  }
+
   const remoteTransport = new WsTransport(tunnelWsUrl);
 
   // Wait for the remote WebSocket to be fully open before sending any requests.
   // A fixed timeout was unreliable on slow networks or first-connect handshakes.
-  await remoteTransport.waitUntilOpen(15_000);
+  await remoteTransport.waitUntilOpen(60_000);
 
   const errors: string[] = [];
   const diverged: string[] = [];

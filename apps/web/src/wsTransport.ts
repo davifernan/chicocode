@@ -214,7 +214,7 @@ export class WsTransport {
       this.handleMessage(event.data);
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event) => {
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -222,13 +222,27 @@ export class WsTransport {
         this.state = "disposed";
         return;
       }
+      // Log close details for tunnel transports (anything that isn't the default local server)
+      if (this.reconnectAttempt >= 0) {
+        console.warn("[WsTransport] close", {
+          url: this.url,
+          code: event.code,
+          reason: event.reason || "(no reason)",
+          wasClean: event.wasClean,
+          attempt: this.reconnectAttempt,
+        });
+      }
       this.state = "closed";
       this.scheduleReconnect();
     });
 
     ws.addEventListener("error", (event) => {
       // Log WebSocket errors for debugging (close event will follow)
-      console.warn("WebSocket connection error", { type: event.type, url: this.url });
+      console.warn("[WsTransport] error", {
+        type: event.type,
+        url: this.url,
+        attempt: this.reconnectAttempt,
+      });
     });
   }
 
